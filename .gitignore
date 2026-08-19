@@ -1,0 +1,14 @@
+# 交叉编译工具链（由 scripts/setup.sh 从 SDK 复制）
+toolchain/
+
+# opus 交叉编译产物与板上库头文件（setup.sh 生成）
+_libs/
+
+# 构建产物
+build/
+*.o
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
