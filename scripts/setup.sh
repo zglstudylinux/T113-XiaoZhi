@@ -74,7 +74,7 @@ make -j"$(nproc)" libopus.la   # 只编库不编工具（host 工具会编失败
 
 mkdir -p "$PROJ_DIR/_libs/lib" "$INC_DST/opus"
 cp .libs/libopus.a "$PROJ_DIR/_libs/lib/"
-cp include/opus/*.h "$INC_DST/opus/"
+cp include/*.h "$INC_DST/opus/"
 
 echo "[setup] libopus 完成：$OPUS_OUT"
 "$TOOLCHAIN_DST/bin/arm-openwrt-linux-readelf" -h "$OPUS_OUT" | grep Machine

@@ -14,8 +14,9 @@ LVGL_DIR_NAME ?= lvgl
 LVGL_DIR ?= $(CURDIR)/third_party
 
 # 板上自带（rootfs）：libssl/libcrypto 1.1.1、libasound 1.1.8、libspeexdsp 1.5.1
-# 头文件从 Tina SDK staging 取（setup.sh 复制到 _libs/include/）
-SDK_STAGING := /home/zgl/SDK/T113_SDK/T113-Tina5.0-V1.2/out/t113/zgl_board/openwrt/staging_dir/target/usr/include
+# 头文件与链接用 .so 副本从 Tina SDK staging 取（setup.sh 复制到 _libs/）
+SDK_STAGING := /home/zgl/SDK/T113_SDK/T113-Tina5.0-V1.2/out/t113/zgl_board/openwrt/staging_dir/target/usr
+SDK_STAGING_LIB := $(SDK_STAGING)/lib
 
 CFLAGS  ?= -std=gnu99 -O2 -g \
 	-march=armv7-a -mtune=cortex-a7 -mfpu=neon -mfloat-abi=hard \
@@ -35,6 +36,7 @@ CFLAGS  ?= -std=gnu99 -O2 -g \
 LDFLAGS ?= -lm \
 	-L$(CURDIR)/_libs/lib -lopus \
 	-L$(CURDIR)/third_party/freetype/lib -lfreetype \
+	-L$(SDK_STAGING_LIB) \
 	-lssl -lcrypto \
 	-lasound -lspeexdsp \
 	-lz -lbz2 -lpthread -lrt -ldl \

@@ -6,6 +6,7 @@
  */
 #include "ui_main.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static lv_obj_t *g_state_label;
