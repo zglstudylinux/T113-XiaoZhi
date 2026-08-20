@@ -79,13 +79,22 @@ scripts/
 
 ## 里程碑
 
-### M0 — 骨架 + 板上录音自检（先测麦克风）← 当前
+### M0 — 骨架 + 板上录音自检（先测麦克风）✅ 完成（2026-08-20）
 - [x] 建目录、复用 bt-speaker 的 third_party（lvgl/lv_drivers/freetype）+ toolchain setup
-- [ ] setup.sh 交叉编译 opus-1.3.1 → `_libs/libopus.a`
-- [ ] 最小 LVGL 界面："AI 小智 480×640" + 中文（FreeType）
-- [ ] `scripts/test_alsa.sh`：arecord 5s（audiocodec 各通道 + snddmic）→ adb pull → 分析能量/底噪，确定采集设备
-- **验证**：屏幕显示正常 + 录音分析结论 → 用户确认 → push 初版
-- **分支**：若板上没接麦克风 → M0 停在"UI 骨架 + opus 编译通过"，等用户接麦再继续
+- [x] setup.sh 交叉编译 opus-1.3.1 → `_libs/libopus.a`（ARM ELF32 + NEON）
+- [x] 最小 LVGL 界面上板验证（fb 抓帧确认）
+- [x] 录音自检完成，**麦克风调通**，结论：
+  - 硬件麦在 **MIC3/ADC3**（dts 注释正确）
+  - **采集必须用 `default` 设备**（`arecord` 不带 `-D`）：板上 `/etc/asound.conf`
+    已定义 `pcm.!default` capture → `CaptureMic`（plug + `ttable.0.2 1` 把硬件
+    ch2=ADC3 映射到用户 ch0，hooks 自动开 MIC3 Switch）→ `CaptureDsnoop`
+    （16k 3ch dsnoop 共享）。**直接 `-D hw:audiocodec,0 -c 1` 只会采到 ADC1（悬空底噪）**
+  - 必开设置：`ADC HPF0/1 Mode=On`（滤直流，否则 DC≈550）、`ADC3 Gain=31`
+    （MIC3 差分输入 `MIC3 Input Select=differ`）
+  - 验证数据：说话 rms 87→824（9.5 倍起伏）、peak 4710；全双工（aplay 同时
+    arecord）正常，喇叭回声可被麦采到（后续 AEC 可用 speexdsp）
+- **发现**：板上 libspeexdsp.so opkg 有记录但文件缺失（烧录镜像问题），deploy.sh
+  已加推送步骤
 
 ### M1 — WiFi 联网 + 配网 UI
 - wifi_manager（wpa_ctrl 封装）：扫描列表、连接、状态回调
