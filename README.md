@@ -45,7 +45,7 @@ make -j$(nproc)        # 产物 build/xiaozhi（ARM 硬浮点，动态链接）
   - 必开：`ADC HPF0/1=On`（滤直流 ~550）、`ADC3 Gain=31`
   - 板侧自测：`arecord -d 5 x.wav && aplay x.wav`（先按上面 amixer 设置）
   - 全双工验证 OK（aplay 同时 arecord，回声可采，AEC 可后续用 speexdsp）
-- [ ] M1：WiFi 联网 + 配网 UI（扫描列表 + 键盘输密码 + 自动重连）
+- [x] M1：WiFi 联网 + 配网 UI（扫描列表 + 键盘输密码 + 自动重连）
 - [ ] M2：WebSocket 连通 xiaozhi.me（hello 握手 + session_id）
 - [ ] M3：语音上行（采集→opus→ws，服务器 VAD 断句，stt 显示）
 - [ ] M4：语音下行（TTS opus 解码→喇叭，tts 状态 UI）

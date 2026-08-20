@@ -96,10 +96,23 @@ scripts/
 - **发现**：板上 libspeexdsp.so opkg 有记录但文件缺失（烧录镜像问题），deploy.sh
   已加推送步骤
 
-### M1 — WiFi 联网 + 配网 UI
-- wifi_manager（wpa_ctrl 封装）：扫描列表、连接、状态回调
-- ui_wifi_setup：扫描列表 + 密码 textarea + lv_keyboard；连接成功存 `/mnt/UDISK/xiaozhi/wifi.cfg`，下次自动重连
-- **验证**：屏幕选 WiFi 输密码 → 板子拿到 IP、ping 通外网 → 确认 → push
+### M1 — WiFi 联网 + 配网 UI ✅ 完成（2026-08-21）
+- wifi_manager：**自实现** wpa_supplicant ctrl 接口（unix DGRAM + 文本协议；板上无 libwpa_client.so）
+  - 启动链：insmod 8723ds.ko（开机不自动加载）→ wpa_supplicant `-O /var/run/wpa_supplicant`
+    （本板 conf 无 ctrl_interface 行，不带 -O 则 ctrl socket 不存在）→ ctrl 命令/事件双通道
+  - API：scan（解析+去重+按 RSSI 排序）/connect（REMOVE→ADD→SET→ENABLE→SELECT→轮询）/dhcp（udhcpc）
+- ui_wifi_setup：扫描线程 → AP 列表（flex column）→ 密码弹窗 + lv_keyboard → 连接线程 →
+  lv_async_call 回 UI；成功存 `/mnt/UDISK/xiaozhi/wifi.cfg`
+- main：启动过渡页 → wifi 后台线程（auto_connect 成功→主界面 / 失败→配网页）
+- **板上验证**：扫描 3 AP → 选 zgl 输密码 → COMPLETED + DHCP 10.235.38.79 → ping 通 →
+  重启 app 自动重连（"已处于连接状态，跳过重连"）→ 直接进主界面
+- **坑**：
+  1. ctrl_open 本地 bind 路径用 pid+tid 生成，同线程两次 open 路径相同 → 第二个 socket
+     bind 失败返回 -1 → 命令通道静默丢（recv EAGAIN 超时）。改静态计数器后缀修复
+  2. auto_connect 无条件 REMOVE 重连会断开已连接的网络；先 poll STATUS 已 COMPLETED
+     且 ssid 匹配则直接复用（补 DHCP）
+  3. connect 轮询不能只依赖事件线程状态（CONNECTED 事件可能在轮询开始前到达丢失），
+     每轮主动发 STATUS
 
 ### M2 — WebSocket 连通（hello 握手）
 - ws_client.c：RFC6455 over OpenSSL BIO（mask、ping/pong、close、fragment）
