@@ -12,11 +12,14 @@
 #include "lv_freetype.h"
 #include "app_state.h"
 #include "ui/ui_main.h"
+#include "ui/ui_wifi_setup.h"
+#include "wifi/wifi_manager.h"
 #include <unistd.h>
 #include <time.h>
 #include <sys/time.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <pthread.h>
 
 /* 板上资源路径（deploy.sh 推送目标）。
  * rootfs overlay 只有 ~8MB，资源放 /mnt/UDISK。 */
@@ -44,9 +47,55 @@ uint32_t custom_tick_get(void)
     return (uint32_t)(now_ms - start_ms);
 }
 
+/* ===== WiFi 启动流程（M1）=====
+ * 后台线程：wifi_manager_open（加载驱动+起 wpa_supplicant，可能 5~10s）
+ *   → 有保存配置则 auto_connect → 成功进主页 / 失败进配网页
+ *   → 无配置直接进配网页
+ * 结果经 lv_async_call 切 UI（线程安全）。 */
+
+typedef struct { int ok; } wifi_boot_msg_t;
+
+void wifi_setup_done_cb(int connected);
+
+static lv_obj_t *g_boot_scr;        /* 启动过渡页 */
+static lv_obj_t *g_boot_label;
+
+static void wifi_boot_done(void *p)
+{
+    wifi_boot_msg_t *m = (wifi_boot_msg_t *)p;
+    if (m->ok) {
+        ui_main_create();
+        app_state_init();
+    } else {
+        ui_wifi_setup_create(wifi_setup_done_cb);
+    }
+    free(m);
+}
+static void *wifi_boot_thread(void *arg)
+{
+    (void)arg;
+    wifi_boot_msg_t *m = (wifi_boot_msg_t *)malloc(sizeof(*m));
+    m->ok = 0;
+
+    if (wifi_manager_open() == 0) {
+        if (wifi_manager_auto_connect() == 0) {
+            printf("[main] WiFi 自动重连成功: %s ip=%s\n",
+                   wifi_manager_get_ssid(), wifi_manager_get_ip());
+            m->ok = 1;
+        } else {
+            printf("[main] 自动重连失败，进配网页\n");
+        }
+    } else {
+        printf("[main] wifi_manager_open 失败，进配网页\n");
+    }
+    lv_async_call(wifi_boot_done, m);
+    return NULL;
+}
+
 int main(int argc, char *argv[])
 {
     (void)argc; (void)argv;
+    setvbuf(stdout, NULL, _IONBF, 0);   /* 后台进程日志实时落文件 */
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
     uint32_t rotated = LV_DISP_ROT_NONE;
@@ -106,10 +155,19 @@ int main(int argc, char *argv[])
         printf("freetype font load FAIL: %s\n", FONT_CN_REGULAR);
     }
 
-    ui_main_create();
+    /* ===== 启动过渡页 + WiFi 后台初始化（M1） ===== */
+    g_boot_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(g_boot_scr, lv_color_hex(0x101418), 0);
+    lv_scr_load(g_boot_scr);
+    g_boot_label = lv_label_create(g_boot_scr);
+    lv_obj_set_style_text_font(g_boot_label, ui_font_cn_32, 0);
+    lv_obj_set_style_text_color(g_boot_label, lv_color_hex(0x4FC3F7), 0);
+    lv_label_set_text(g_boot_label, "AI 小智 启动中…\n正在准备 WiFi");
+    lv_obj_align(g_boot_label, LV_ALIGN_CENTER, 0, 0);
 
-    /* ===== 小智状态机（M1+ 接 wifi/ws；当前仅 UI 骨架） ===== */
-    app_state_init();
+    pthread_t tid;
+    pthread_create(&tid, NULL, wifi_boot_thread, NULL);
+    pthread_detach(tid);
 
     /* ===== 主循环 ===== */
     while (1) {
@@ -118,8 +176,20 @@ int main(int argc, char *argv[])
     }
 
     app_state_deinit();
+    wifi_manager_close();
     lv_ft_font_destroy(ui_font_cn_48);
     lv_ft_font_destroy(ui_font_cn_32);
     sunxifb_exit();
     return 0;
+}
+
+/* 配网页完成回调（主线程）：连接成功 → 进主界面 */
+void wifi_setup_done_cb(int connected)
+{
+    printf("[main] wifi_setup_done connected=%d\n", connected);
+    if (connected) {
+        ui_main_create();
+        app_state_init();
+        /* 主界面顶部显示 WiFi 状态（M2 起在此显示服务器连接状态） */
+    }
 }

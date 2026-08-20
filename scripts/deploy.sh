@@ -47,5 +47,6 @@ fi
 
 echo "[deploy] 启动..."
 $ADB shell "/sbin/start-stop-daemon -K -p /tmp/xiaozhi.pid -x $APP_PATH" 2>/dev/null || true
-$ADB shell "/sbin/start-stop-daemon -b -m -S -p /tmp/xiaozhi.pid -x $APP_PATH"
+$ADB shell "/sbin/start-stop-daemon -b -m -S -p /tmp/xiaozhi.pid -x /bin/sh -- -c \"exec $APP_PATH >/tmp/xiaozhi.log 2>\&1\""
+echo "[deploy] log: adb shell cat /tmp/xiaozhi.log"
 echo "[deploy] 完成。查看进程：adb shell ps | grep xiaozhi"
