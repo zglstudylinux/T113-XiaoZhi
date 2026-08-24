@@ -114,11 +114,33 @@ scripts/
   3. connect 轮询不能只依赖事件线程状态（CONNECTED 事件可能在轮询开始前到达丢失），
      每轮主动发 STATUS
 
-### M2 — WebSocket 连通（hello 握手）
-- ws_client.c：RFC6455 over OpenSSL BIO（mask、ping/pong、close、fragment）
-- 连 xiaozhi.me（URL+token 在 `/mnt/UDISK/xiaozhi/config.ini`：ws_url/token/device_id/mac）
-- xz_protocol：发 hello、收服务器 hello（存 session_id）、断线重连（指数退避）
-- **验证**：UI 显示已连接 + session_id；log 显示握手 JSON 往返 → 确认 → push
+### M2 — WebSocket 连通（hello 握手）✅ 完成（2026-08-25）
+- ws_client.c：RFC6455 over OpenSSL（原生 socket+poll 连接 → SSL_connect → BIO_f_ssl IO）
+  - 客户端 mask、ping/pong、close 帧、**20s ping 保活**、断线重连指数退避 1→30s
+  - 收包重组用 **parse_off 游标**（不搬移数据；最初两步 memmove 版本在"binary 帧后跟
+    text 帧"时会把帧 2 长度读成 payload 字节值——x86 单测复现后重写）
+- xz_protocol.c：**OTA 设备注册**（POST `api.tenclass.net/xiaozhi/ota/`）→ hello 握手
+  - OTA 响应含 `websocket.token`、`activation.code`（未绑定设备的 6 位验证码，显示到屏幕）
+  - cJSON 1.7.13（SDK aliyun-link-sdk 内 vendored，third_party/cjson/ 编入工程）
+- **板上验证**：OTA 注册 → 验证码 959311 屏显 → 用户 xiaozhi.me 控制台绑定 →
+  ws hello 握手成功（session_id 往返，下行 audio_params 24kHz opus 60ms）→
+  空闲被踢自动重连恢复；UI 显示"服务器已连接 + session_id"（fb 抓帧确认）
+- **坑（重要）**：
+  1. **Device-Id 必须小写 MAC**：服务器 OTA 注册按小写记账（响应里 mqtt client_id
+     就是 `34_75_63_29_c5_55`），握手发大写 → 未注册设备 → 101 后立即空 close。
+     PC 端 systematic 探测才定位到（doc 示例 MAC `11:22:33:44:55:66` 存活、我们的
+     大写 MAC 被踢、同一 MAC 小写存活）
+  2. **OTA POST 必须带 User-Agent**：缺失返回 400 "Invalid board type or app
+     version"（误导性报错，实为 UA 校验）
+  3. **board.type 必须官方已注册板型**：用 `bread-compact-wifi`（面包板），
+     `zgl_board`/自拟名 400
+  4. **Client-Id 必须 UUID 格式**：非 UUID（如 "t113-xiaozhi-0001"）→ "Invalid client ID"
+  5. **未绑定设备的 ws 会被立即 close**：必须先 OTA 拿验证码 → 用户控制台绑定 →
+     才允许会话。绑定后 OTA 响应不再含 activation 字段（可作为绑定状态判据）
+  6. **TLS IO 必须走 BIO_f_ssl 包装的 SSL BIO**：拿 `SSL_get_wbio()`（socket BIO）
+     直接读写会绕过加密层发明文，服务器握手成功后收到明文 HTTP 直接断连
+  7. 服务器空闲 ~60-90s 踢连接（即使 ping 保活也踢 hello-only 的会话，可能
+     要求 listen 开启音频会话）；重连 1-2s 内恢复，M3 接入音频后按需重连
 
 ### M3 — 语音链路上行（说话 → 服务器识别）
 - audio_cap：ALSA capture 线程（M0 确定的设备）16k mono → opus 60ms 帧

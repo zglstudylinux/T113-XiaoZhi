@@ -28,6 +28,10 @@ $ADB shell mkdir -p /mnt/UDISK/xiaozhi
 $ADB push "$PROJ_DIR/build/$(${ADB} shell echo ok >/dev/null 2>&1; echo xiaozhi)" "$APP_PATH" 2>/dev/null || $ADB push "$PROJ_DIR/build/xiaozhi" "$APP_PATH"
 $ADB shell chmod +x "$APP_PATH"
 
+echo "[deploy] 推送配置 config.ini（板上已有则不覆盖）..."
+$ADB shell "[ -f /mnt/UDISK/xiaozhi/config.ini ] || echo MISSING" | grep -q MISSING && \
+    $ADB push "$PROJ_DIR/assets/config.ini" /mnt/UDISK/xiaozhi/config.ini || true
+
 echo "[deploy] 推送字体..."
 $ADB shell mkdir -p /mnt/UDISK/xiaozhi/fonts
 $ADB push "$PROJ_DIR/assets/fonts/." /mnt/UDISK/xiaozhi/fonts/

@@ -27,6 +27,7 @@ CFLAGS  ?= -std=gnu99 -O2 -g \
 	-I$(LVGL_DIR)/ \
 	-I$(CURDIR)/third_party/lvgl/src/extra/libs/freetype \
 	-I$(CURDIR)/third_party/freetype/include \
+	-I$(CURDIR)/third_party/cjson \
 	-DLV_USE_PNG=1 -DLV_USE_FS_POSIX=1 \
 	-Wall -Wno-unused-function -Wno-unused-parameter -Wno-missing-prototypes \
 	-Wno-sign-compare -Wno-format-nonliteral
@@ -48,6 +49,7 @@ BUILD = build
 #Collect the files to compile
 MAINSRC = ./src/main.c ./src/app_state.c \
 	./src/net/ws_client.c ./src/net/xz_protocol.c \
+	./third_party/cjson/cJSON.c \
 	./src/audio/audio_cap.c ./src/audio/audio_play.c \
 	./src/audio/opus_codec.c ./src/audio/resample.c \
 	./src/wifi/wifi_manager.c \

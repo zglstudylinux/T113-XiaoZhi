@@ -46,7 +46,10 @@ make -j$(nproc)        # 产物 build/xiaozhi（ARM 硬浮点，动态链接）
   - 板侧自测：`arecord -d 5 x.wav && aplay x.wav`（先按上面 amixer 设置）
   - 全双工验证 OK（aplay 同时 arecord，回声可采，AEC 可后续用 speexdsp）
 - [x] M1：WiFi 联网 + 配网 UI（扫描列表 + 键盘输密码 + 自动重连）
-- [ ] M2：WebSocket 连通 xiaozhi.me（hello 握手 + session_id）
+- [x] M2：WebSocket 连通 xiaozhi.me（OTA 设备注册 + 激活验证码 + hello 握手 + session_id）
+  - 设备身份：Device-Id=**小写** wlan0 MAC、Client-Id=UUID、board.type=bread-compact-wifi
+  - OTA 注册（POST /xiaozhi/ota/，必须带 User-Agent）→ 未绑定设备屏显 6 位验证码 →
+    xiaozhi.me 控制台绑定 → ws hello 握手（服务器下行 24kHz opus）
 - [ ] M3：语音上行（采集→opus→ws，服务器 VAD 断句，stt 显示）
 - [ ] M4：语音下行（TTS opus 解码→喇叭，tts 状态 UI）
 - [ ] M5：产品化 UI + 与蓝牙音箱切换 + 开机自启

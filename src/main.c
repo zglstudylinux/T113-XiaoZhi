@@ -14,6 +14,7 @@
 #include "ui/ui_main.h"
 #include "ui/ui_wifi_setup.h"
 #include "wifi/wifi_manager.h"
+#include "net/xz_protocol.h"
 #include <unistd.h>
 #include <time.h>
 #include <sys/time.h>
@@ -57,6 +58,58 @@ typedef struct { int ok; } wifi_boot_msg_t;
 
 void wifi_setup_done_cb(int connected);
 
+/* ===== 小智协议事件（协议线程调用 → lv_async_call 转 UI） ===== */
+
+typedef struct { int evt; char data[512]; } xz_evt_msg_t;
+
+static void xz_evt_async(void *p)
+{
+    xz_evt_msg_t *m = (xz_evt_msg_t *)p;
+    switch (m->evt) {
+    case XZ_EVT_ACTIVATION:
+        ui_main_on_server_info("设备未绑定，验证码：", m->data);
+        app_state_set(XZ_STATE_IDLE, "activation code");
+        break;
+    case XZ_EVT_HELLO_OK:
+        ui_main_on_server_info("服务器已连接", m->data);
+        app_state_set(XZ_STATE_IDLE, "hello ok");
+        break;
+    case XZ_EVT_GOODBYE:
+        ui_main_on_server_info("设备未绑定", m->data);
+        app_state_set(XZ_STATE_IDLE, "goodbye");
+        break;
+    case XZ_EVT_DISCONNECTED:
+        ui_main_on_server_info("服务器连接断开，重试中…", "");
+        app_state_set(XZ_STATE_CONNECTING, "disconnected");
+        break;
+    case XZ_EVT_CONNECTED:
+        ui_main_on_server_info("已连上，握手中…", "");
+        break;
+    default:
+        break;
+    }
+    free(m);
+}
+
+static void xz_evt_cb(int event, const char *data, void *user)
+{
+    (void)user;
+    xz_evt_msg_t *m = (xz_evt_msg_t *)malloc(sizeof(*m));
+    if (!m) return;
+    m->evt = event;
+    snprintf(m->data, sizeof(m->data), "%s", data ? data : "");
+    lv_async_call(xz_evt_async, m);
+}
+
+/* WiFi 就绪后启动协议（连 xiaozhi.me，未绑定设备由服务器下发验证码） */
+static void xiaozhi_start(void)
+{
+    if (xz_protocol_start(xz_evt_cb, NULL) == 0) {
+        app_state_set(XZ_STATE_CONNECTING, "ws connecting");
+        ui_main_on_server_info("连接服务器中…", "");
+    }
+}
+
 static lv_obj_t *g_boot_scr;        /* 启动过渡页 */
 static lv_obj_t *g_boot_label;
 
@@ -66,6 +119,7 @@ static void wifi_boot_done(void *p)
     if (m->ok) {
         ui_main_create();
         app_state_init();
+        xiaozhi_start();
     } else {
         ui_wifi_setup_create(wifi_setup_done_cb);
     }
@@ -176,6 +230,7 @@ int main(int argc, char *argv[])
     }
 
     app_state_deinit();
+    xz_protocol_stop();
     wifi_manager_close();
     lv_ft_font_destroy(ui_font_cn_48);
     lv_ft_font_destroy(ui_font_cn_32);
@@ -190,6 +245,6 @@ void wifi_setup_done_cb(int connected)
     if (connected) {
         ui_main_create();
         app_state_init();
-        /* 主界面顶部显示 WiFi 状态（M2 起在此显示服务器连接状态） */
+        xiaozhi_start();
     }
 }

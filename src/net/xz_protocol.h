@@ -1,10 +1,40 @@
 /*
- * xz_protocol.h — 小智协议层（M2 实装：hello/listen/tts/stt + opus 帧收发）
+ * xz_protocol.h — 小智协议层（hello/listen/tts/stt/llm + opus 帧收发）
+ *
+ * M2：连接 + hello 握手 + goodbye（6 位验证码）显示
+ * M3/M4：opus 帧上下行（接口已留）
  */
 #ifndef XZ_PROTOCOL_H
 #define XZ_PROTOCOL_H
 
-int  xz_protocol_start(void);
+#include <stdint.h>
+
+/* 协议事件回调（网络线程调用！UI 更新需自行 lv_async_call 转线程） */
+typedef void (*xz_evt_cb_t)(int event, const char *data, void *user);
+
+enum {
+    XZ_EVT_HELLO_OK = 1,    /* 服务器 hello：data=session_id */
+    XZ_EVT_GOODBYE,         /* 未绑定：data=验证码相关文本 */
+    XZ_EVT_STT,             /* data=识别文本 */
+    XZ_EVT_TTS_START,
+    XZ_EVT_TTS_SENTENCE,    /* data=句子文本 */
+    XZ_EVT_TTS_STOP,
+    XZ_EVT_DISCONNECTED,    /* 连接断开 */
+    XZ_EVT_CONNECTED,       /* ws 已连上（hello 前） */
+    XZ_EVT_ACTIVATION,      /* OTA 注册返回验证码：data=6 位码 */
+};
+
+/* 后台线程启动连接（读 /mnt/UDISK/xiaozhi/config.ini；无则用默认）。
+ * 断线自动重连（指数退避，上限 30s）。0 成功启动 */
+int  xz_protocol_start(xz_evt_cb_t cb, void *user);
 void xz_protocol_stop(void);
+
+/* 当前 session_id（未握手为 NULL） */
+const char *xz_protocol_session_id(void);
+
+/* ---- M3/M4 用 ---- */
+int xz_protocol_send_listen_start(void);   /* listen start(auto) */
+int xz_protocol_send_listen_stop(void);
+int xz_protocol_send_opus(const uint8_t *data, int len);
 
 #endif

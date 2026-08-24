@@ -10,6 +10,7 @@
 #include <string.h>
 
 static lv_obj_t *g_state_label;
+static lv_obj_t *g_net_label;
 static lv_obj_t *g_chat_cont;
 
 static const char *state_text(xz_state_t s)
@@ -43,10 +44,17 @@ void ui_main_create(void)
     lv_label_set_text(g_state_label, state_text(XZ_STATE_IDLE));
     lv_obj_align(g_state_label, LV_ALIGN_TOP_MID, 0, 96);
 
+    /* 服务器信息行（M2：session / 验证码） */
+    g_net_label = lv_label_create(scr);
+    lv_obj_set_style_text_font(g_net_label, ui_font_cn_32, 0);
+    lv_obj_set_style_text_color(g_net_label, lv_color_hex(0x9E9E9E), 0);
+    lv_label_set_text(g_net_label, "未连接服务器");
+    lv_obj_align(g_net_label, LV_ALIGN_TOP_MID, 0, 150);
+
     /* 聊天区（滚动容器，M3 接入气泡） */
     g_chat_cont = lv_obj_create(scr);
-    lv_obj_set_size(g_chat_cont, 440, 340);
-    lv_obj_align(g_chat_cont, LV_ALIGN_TOP_MID, 0, 150);
+    lv_obj_set_size(g_chat_cont, 440, 260);
+    lv_obj_align(g_chat_cont, LV_ALIGN_TOP_MID, 0, 200);
     lv_obj_set_style_bg_color(g_chat_cont, lv_color_hex(0x1A2129), 0);
     lv_obj_set_style_bg_opa(g_chat_cont, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(g_chat_cont, 0, 0);
@@ -72,6 +80,33 @@ void ui_main_on_state(xz_state_t s, const char *reason)
     lv_label_set_text(g_state_label, state_text(s));
     if (reason && strlen(reason) > 0)
         printf("[ui] state=%d reason=%s\n", (int)s, reason);
+}
+
+/* ---- 服务器信息行（M2；任意线程可调，lv_async_call 转主线程） ---- */
+typedef struct {
+    char l1[128];
+    char l2[192];
+} net_info_msg_t;
+
+static void net_info_async(void *p)
+{
+    net_info_msg_t *m = (net_info_msg_t *)p;
+    if (g_net_label == NULL) { free(m); return; }
+    if (m->l2[0])
+        lv_label_set_text_fmt(g_net_label, "%s\n%s", m->l1, m->l2);
+    else
+        lv_label_set_text(g_net_label, m->l1);
+    lv_obj_align(g_net_label, LV_ALIGN_TOP_MID, 0, 150);
+    free(m);
+}
+
+void ui_main_on_server_info(const char *line1, const char *line2)
+{
+    net_info_msg_t *m = (net_info_msg_t *)malloc(sizeof(*m));
+    if (!m) return;
+    snprintf(m->l1, sizeof(m->l1), "%s", line1 ? line1 : "");
+    snprintf(m->l2, sizeof(m->l2), "%s", line2 ? line2 : "");
+    lv_async_call(net_info_async, m);
 }
 
 /* ---- 跨线程入口（M3 起用；现仅主线程路径） ---- */
