@@ -37,4 +37,12 @@ int xz_protocol_send_listen_start(void);   /* listen start(auto) */
 int xz_protocol_send_listen_stop(void);
 int xz_protocol_send_opus(const uint8_t *data, int len);
 
+/* ---- 采集会话（M3：按钮触发；内部管 capture + listen + opus 上行） ---- */
+/* 开始一次说话：连接就绪则 listen start + 起 capture；0 成功 */
+int  xz_protocol_talk_start(void);
+/* 结束本次说话（stop listen + 停 capture）；服务器 VAD 判停后也会收到
+ * stt/tts 事件自动回到待命 */
+int  xz_protocol_talk_stop(void);
+int  xz_protocol_talking(void);
+
 #endif

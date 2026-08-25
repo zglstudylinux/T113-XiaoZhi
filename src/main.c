@@ -85,6 +85,19 @@ static void xz_evt_async(void *p)
     case XZ_EVT_CONNECTED:
         ui_main_on_server_info("已连上，握手中…", "");
         break;
+    case XZ_EVT_STT:
+        ui_main_add_chat(1, m->data);
+        app_state_set(XZ_STATE_IDLE, "stt");
+        break;
+    case XZ_EVT_TTS_SENTENCE:
+        ui_main_add_chat(0, m->data);
+        break;
+    case XZ_EVT_TTS_START:
+        app_state_set(XZ_STATE_SPEAKING, "tts start");
+        break;
+    case XZ_EVT_TTS_STOP:
+        app_state_set(XZ_STATE_IDLE, "tts stop");
+        break;
     default:
         break;
     }

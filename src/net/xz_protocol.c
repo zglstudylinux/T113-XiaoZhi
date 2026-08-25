@@ -11,6 +11,8 @@
 #include "xz_protocol.h"
 #include "ws_client.h"
 #include "cJSON.h"
+#include "audio_cap.h"
+#include "opus_codec.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +21,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <time.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -393,6 +396,83 @@ int xz_protocol_send_opus(const uint8_t *data, int len)
     return ws_client_send_binary(data, (size_t)len);
 }
 
+/* ---------------- 采集会话（M3）----------------
+ *
+ * 按钮 → talk_start：listen start(auto) → 起 capture →
+ * capture 线程回调里 opus 编码 → ws binary 上行。
+ * 服务器 VAD 判停 → stt 文本 → （M4 前）UI 显示后回待命；
+ * 用户也可再点按钮 talk_stop 提前结束（服务器收到 stop 后走识别）。
+ */
+
+static atomic_int g_talking = 0;
+static int g_opus_frames = 0;         /* 本会话已发帧数（日志用） */
+static struct timespec g_opus_t0;
+
+/* capture 线程回调：编码 + 上行 */
+static void cap_on_frame(const int16_t *pcm, int samples, void *user)
+{
+    (void)user;
+    if (!atomic_load(&g_talking))
+        return;
+    uint8_t opus_buf[512];
+    int n = opus_enc_encode(pcm, samples, opus_buf, sizeof(opus_buf));
+    if (n > 0) {
+        int rc = ws_client_send_binary(opus_buf, (size_t)n);
+        g_opus_frames++;
+        /* 低频心跳日志（首帧 + 每 100 帧 ≈ 6s），诊断供帧节奏 */
+        if (g_opus_frames == 1 || g_opus_frames % 100 == 0) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            long ms = (now.tv_sec - g_opus_t0.tv_sec) * 1000
+                    + (now.tv_nsec - g_opus_t0.tv_nsec) / 1000000;
+            printf("[xz] opus#%d %dB rc=%d t+%ldms\n",
+                   g_opus_frames, n, rc, ms);
+        }
+    }
+}
+
+int xz_protocol_talk_start(void)
+{
+    if (!atomic_load(&g_ws_ok)) {
+        printf("[xz] talk_start: 未连接\n");
+        return -1;
+    }
+    if (atomic_load(&g_talking))
+        return 0;
+
+    if (opus_enc_init() != 0)
+        return -1;
+    g_opus_frames = 0;
+    clock_gettime(CLOCK_MONOTONIC, &g_opus_t0);
+    if (xz_protocol_send_listen_start() != 0) {
+        opus_enc_deinit();
+        return -1;
+    }
+    if (audio_cap_start(cap_on_frame, NULL) != 0) {
+        xz_protocol_send_listen_stop();
+        opus_enc_deinit();
+        return -1;
+    }
+    atomic_store(&g_talking, 1);
+    return 0;
+}
+
+int xz_protocol_talk_stop(void)
+{
+    if (!atomic_load(&g_talking))
+        return 0;
+    atomic_store(&g_talking, 0);
+    audio_cap_stop();           /* 先停采集，最后一帧落地 */
+    xz_protocol_send_listen_stop();
+    opus_enc_deinit();
+    return 0;
+}
+
+int xz_protocol_talking(void)
+{
+    return atomic_load(&g_talking);
+}
+
 /* ---------------- 下行分发 ---------------- */
 
 static void handle_text(const char *json)
@@ -423,6 +503,9 @@ static void handle_text(const char *json)
         if (g_cb) g_cb(XZ_EVT_GOODBYE, json, g_cb_user);
     } else if (strcmp(type, "stt") == 0) {
         const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
+        /* VAD 判停 → 服务器已收到完整语音，结束本地采集 */
+        if (atomic_load(&g_talking))
+            xz_protocol_talk_stop();
         if (g_cb && text) g_cb(XZ_EVT_STT, text, g_cb_user);
     } else if (strcmp(type, "tts") == 0) {
         const char *state = cJSON_GetStringValue(cJSON_GetObjectItem(root, "state"));
@@ -465,6 +548,12 @@ static void on_ws_event(void *user, int event)
     } else if (event == WS_EV_DISCONNECTED) {
         atomic_store(&g_ws_ok, 0);
         g_session_id[0] = '\0';
+        /* 断线时若正在说话：停采集（不发 stop——连接已断） */
+        if (atomic_load(&g_talking)) {
+            atomic_store(&g_talking, 0);
+            audio_cap_stop();
+            opus_enc_deinit();
+        }
         if (g_cb) g_cb(XZ_EVT_DISCONNECTED, NULL, g_cb_user);
     }
 }

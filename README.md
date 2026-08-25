@@ -50,7 +50,11 @@ make -j$(nproc)        # 产物 build/xiaozhi（ARM 硬浮点，动态链接）
   - 设备身份：Device-Id=**小写** wlan0 MAC、Client-Id=UUID、board.type=bread-compact-wifi
   - OTA 注册（POST /xiaozhi/ota/，必须带 User-Agent）→ 未绑定设备屏显 6 位验证码 →
     xiaozhi.me 控制台绑定 → ws hello 握手（服务器下行 24kHz opus）
-- [ ] M3：语音上行（采集→opus→ws，服务器 VAD 断句，stt 显示）
+- [x] M3：语音上行（采集→opus→ws，服务器 VAD 断句，stt 显示）
+  - 采集：ALSA default 设备 16k mono（自动恢复 HPF/增益 mixer 设置）→ opus 60ms 帧上行
+  - **SSL 并发坑**：SSL_read 与 SSL_write 并发会破坏 SSL 状态机（表现为假"断连"），
+    所有 BIO 读写共持 io_lock 互斥（详见 plan.md M3）
+  - 实测：对板说话 → stt 识别一字不差 → AI 回复文本气泡显示
 - [ ] M4：语音下行（TTS opus 解码→喇叭，tts 状态 UI）
 - [ ] M5：产品化 UI + 与蓝牙音箱切换 + 开机自启
 

@@ -37,8 +37,9 @@ typedef struct {
     BIO          *bio;
     SSL          *ssl;        /* wss 时非 NULL */
     SSL_CTX      *ssl_ctx;
+    int           sock;       /* 原生 socket fd（poll 用） */
     int           connected;
-    pthread_mutex_t tx_lock;
+    pthread_mutex_t io_lock;  /* SSL 对象非线程安全：读/写互斥（tx_lock 更名） */
     volatile int  closing;
     ws_on_message_t on_msg;
     ws_on_event_t   on_evt;
@@ -55,14 +56,24 @@ static ws_ctx_t g_ctx;
 
 int ws_client_is_connected(void) { return g_ctx.connected; }
 
-/* ---------------- 底层读写 ---------------- */
+/* ---------------- 底层读写 ----------------
+ *
+ * SSL 对象不是线程安全的：ws 线程 SSL_read 与 capture 线程 SSL_write
+ * 并发会破坏 SSL 内部状态机（实测症状：SSL_read 返回 SYSCALL+errno=EAGAIN
+ * 的假"断连"，M3 上行音频时必现）。所有 BIO 读/写都持 io_lock。
+ * 读路径先 poll socket 可读（不持锁），可读才持锁短读，
+ * 避免持锁等 1s SO_RCVTIMEO 把写线程饿死。
+ */
 
 static int bio_write_all(const uint8_t *data, size_t len)
 {
     size_t off = 0;
     int retry = 0;
     while (off < len) {
-        int n = BIO_write(g_ctx.bio, data + off, (int)(len - off));
+        int n;
+        pthread_mutex_lock(&g_ctx.io_lock);
+        n = BIO_write(g_ctx.bio, data + off, (int)(len - off));
+        pthread_mutex_unlock(&g_ctx.io_lock);
         if (n > 0) {
             off += (size_t)n;
             retry = 0;
@@ -86,10 +97,18 @@ static int bio_write_all(const uint8_t *data, size_t len)
     return 0;
 }
 
-/* 返回 >0 数据；0 超时重试（SO_RCVTIMEO 到期）；<0 对端关闭/错误 */
+/* 返回 >0 数据；0 无数据（本次没读到）；<0 对端关闭/错误 */
 static int bio_read(uint8_t *buf, int len)
 {
+    /* 先 poll socket（不持锁），500ms 内无可读即让步 */
+    struct pollfd pfd = { .fd = g_ctx.sock, .events = POLLIN };
+    int pr = poll(&pfd, 1, 500);
+    if (pr <= 0)
+        return 0;    /* 超时/被信号打断：让步（保活/检查 closing） */
+
+    pthread_mutex_lock(&g_ctx.io_lock);
     int n = BIO_read(g_ctx.bio, buf, len);
+    pthread_mutex_unlock(&g_ctx.io_lock);
     if (n > 0)
         return n;
     if (n == 0)
@@ -98,8 +117,10 @@ static int bio_read(uint8_t *buf, int len)
     if (g_ctx.ssl) {
         ssl_err = SSL_get_error(g_ctx.ssl, n);
         if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE)
-            return 0;   /* socket 超时（EAGAIN），上层退避重试 */
-        printf("[ws] read ssl_err=%d\n", ssl_err);
+            return 0;   /* TLS 记录未收全等，下次再试 */
+        printf("[ws] read ssl_err=%d errno=%d(%s) queue=%lu\n",
+               ssl_err, errno, strerror(errno),
+               (unsigned long)ERR_get_error());
         return -1;
     }
     if (BIO_should_retry(g_ctx.bio))
@@ -142,12 +163,19 @@ static int send_frame(int opcode, const uint8_t *payload, size_t len)
     for (size_t i = 0; i < len; i++)
         masked[i] = payload[i] ^ mask[i & 3];
 
-    pthread_mutex_lock(&g_ctx.tx_lock);
-    int rc = -1;
-    if (bio_write_all(hdr, (size_t)hlen) == 0 &&
-        bio_write_all(masked, len) == 0)
-        rc = 0;
-    pthread_mutex_unlock(&g_ctx.tx_lock);
+    /* 头+体拼一个连续缓冲，单次写出（单次 SSL_write → 单个 TLS 记录。
+     * 分开写 = 两个 TLS 记录，实测服务器在 listen 会话中会因此断连） */
+    size_t total = (size_t)hlen + len;
+    uint8_t *pkt = (uint8_t *)malloc(total);
+    if (!pkt) {
+        free(masked);
+        return -1;
+    }
+    memcpy(pkt, hdr, (size_t)hlen);
+    memcpy(pkt + hlen, masked, len);
+
+    int rc = bio_write_all(pkt, total) == 0 ? 0 : -1;
+    free(pkt);
     free(masked);
     return rc;
 }
@@ -164,13 +192,11 @@ int ws_client_send_binary(const uint8_t *data, size_t len)
 
 /* ---------------- 帧接收 ---------------- */
 
-/* ---------------- 帧接收 ---------------- */
-
 /* 待解析数据指针/长度 */
 #define RX_AVAIL   (g_ctx.rx_len - g_ctx.parse_off)
 #define RX_P       (g_ctx.rx_buf + g_ctx.parse_off)
 
-/* 解析一帧头。成功时 *payload_off/*payload_len 指向 rx_buf 内的位置
+/* 解析一帧头。成功时 payload_off/payload_len 指向 rx_buf 内的位置
  * （不搬移数据），parse_off 前移到帧尾；返回 0。
  * -1 数据不足（parse_off 不动）；-2 协议错。 */
 static int parse_one_frame(uint8_t *opcode_out, size_t *payload_off,
@@ -323,7 +349,7 @@ int ws_client_connect(const char *url, const char *headers,
     g_ctx.rx_buf = (uint8_t *)malloc(WS_RCV_BUF_MAX);
     if (!g_ctx.rx_buf)
         return -1;
-    pthread_mutex_init(&g_ctx.tx_lock, NULL);
+    pthread_mutex_init(&g_ctx.io_lock, NULL);
     g_ctx.on_msg = on_msg;
     g_ctx.on_evt = on_evt;
     g_ctx.user   = user;
@@ -362,11 +388,12 @@ int ws_client_connect(const char *url, const char *headers,
         }
     }
     freeaddrinfo(res);
-    /* 转回阻塞 + SO_RCVTIMEO/SO_SNDTIMEO：收包循环超时返回 EAGAIN 检查 closing */
+    /* 转回阻塞 + 保留 fd 给 bio_read 的 poll 用。
+     * 不再依赖 SO_RCVTIMEO：读路径 poll 判可读后才短读。 */
     fcntl(fd, F_SETFL, flags);
-    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    g_ctx.sock = fd;
 
     /* BIO 包装 socket */
     BIO *conn = BIO_new_socket(fd, BIO_CLOSE);
@@ -418,7 +445,7 @@ int ws_client_connect(const char *url, const char *headers,
     printf("[ws] connected %s:%s%s\n", host, port, path);
 
     /* ---- 收包循环 ---- */
-    time_t last_rx = time(NULL), last_ping = time(NULL);
+    time_t last_ping = time(NULL);
     while (!g_ctx.closing) {
         uint8_t opcode;
         size_t poff = 0, plen = 0;
@@ -434,17 +461,15 @@ int ws_client_connect(const char *url, const char *headers,
                 break;
             }
             if (n == 0) {
-                /* 空闲保活：每 20s 发 ping（服务器 idle ~60-90s 会踢） */
+                /* poll 空闲返回：保活 ping（服务器 idle ~60-90s 会踢） */
                 time_t now = time(NULL);
                 if (now - last_ping >= 20) {
                     if (send_frame(0x9, (const uint8_t *)"keepalive", 9) == 0)
                         last_ping = now;
                 }
-                usleep(20 * 1000);   /* 无数据退避，兼查 closing */
                 continue;
             }
             g_ctx.rx_len += (size_t)n;
-            last_rx = time(NULL);
             continue;
         }
         if (rc == -2)
@@ -496,7 +521,7 @@ cleanup:
     g_ctx.bio = NULL;
     g_ctx.ssl = NULL;
     g_ctx.ssl_ctx = NULL;
-    pthread_mutex_destroy(&g_ctx.tx_lock);
+    pthread_mutex_destroy(&g_ctx.io_lock);
     free(g_ctx.rx_buf);
     g_ctx.rx_buf = NULL;
     return g_ctx.connected ? 0 : -1;

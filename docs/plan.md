@@ -142,11 +142,39 @@ scripts/
   7. 服务器空闲 ~60-90s 踢连接（即使 ping 保活也踢 hello-only 的会话，可能
      要求 listen 开启音频会话）；重连 1-2s 内恢复，M3 接入音频后按需重连
 
-### M3 — 语音链路上行（说话 → 服务器识别）
-- audio_cap：ALSA capture 线程（M0 确定的设备）16k mono → opus 60ms 帧
-- listen start(auto) → 发 opus 帧 → 服务器 VAD 判停 → 收 stt 文本
-- UI：说话按钮 + stt 文本气泡
-- **验证**：对板说话 → 屏幕显示识别文字 → 确认 → push
+### M3 — 语音链路上行（说话 → 服务器识别）✅ 完成（2026-08-25）
+- audio_cap：ALSA `default` 设备 capture 线程（16k S16_LE mono，60ms=960 样本/帧）
+  - mixer 自动恢复（snd_ctl API，**必须设 SND_CTL_ELEM_IFACE_MIXER**，否则找不到控件）：
+    `ADC HPF0/1 Mode=On` + `ADC3 Gain=31`（断电回 dts 默认 HPF Off/Gain 19）
+  - 请求 period 320 样本被 plug 协商到 640（asound.conf CaptureDsnoop 固定值），
+    readi 按 320 读，攒 3 个周期 = 960 样本回调一帧
+- opus_codec：libopus encoder（VOIP/32kbps/complexity 5），每次 talk_start 创建、stop 销毁
+- xz_protocol talk 会话：按钮 → listen start(auto) → capture 起 → 回调编码+binary 上行；
+  stt 到达或再点按钮 → talk_stop（停采集 + listen stop）
+- UI：说话按钮（聆听中变红/STOP 图标）、stt 绿色气泡（右对齐）、tts 白色气泡、
+  气泡自动滚底、上限 8 条防内存涨
+- **板上验证**：说"喂喂喂，你好，小四能听到吗？喂喂喂"→ stt 一字不差 →
+  AI 回复"听得见听得见啦～刚才信号好像有点卡，吓我一跳。怎么了吗？"（含 llm 表情）；
+  fb 抓帧确认气泡显示正确
+- **坑（重要，排查一晚上）**：
+  1. **SSL 对象并发读写是根因大坑**：ws 线程 SSL_read（1s SO_RCVTIMEO 阻塞中）+
+     capture 线程 SSL_write 并发 → OpenSSL SSL 对象状态机被破坏 → SSL_read 返回
+     `SSL_ERROR_SYSCALL` + errno=EAGAIN（实际只是读超时！）→ 被当成"对端关闭"
+     退出收包循环 → 主动关 socket。表现为：**listen start 后 ~0.5-1s 必断**，
+     与音频内容无关（发假帧也断）。修复：所有 BIO 读/写共持 `io_lock` 互斥；
+     读路径先 poll socket 可读（不持锁）再持锁短读，避免饿死写线程
+  2. **诊断路径**：PC 端纯标准库 raw-socket ws 探测脚本（/tmp/probe_listen.py 模式）
+     对照排除法定位——PC 同协议同假帧不断 → 板上假帧也断 → 排除服务器/协议/音频内容
+     → 加 errno 日志抓到 EAGAIN → 锁定 SSL 并发
+  3. **make CFLAGS=... 覆盖会污染 .o**：临时诊断宏（DIAG_FAKE_FRAMES）编进
+     xz_protocol.o 后，普通 make 因 .c 未变不重编 → 正式版继续发假帧。
+     诊断构建要用独立产物名或 touch 源文件
+  4. UDISK 空间紧张（36MB 分区，speaker 12.3M + xiaozhi 二进制 4.2M×2 份满了）：
+     字体 8.4MB 与 speaker 重复 → xiaozhi/fonts 软链到 speaker/fonts；
+     deploy.sh 加了失败回退软链逻辑；诊断二进制用完即删
+  5. 服务器 listen 后 ~20s 无音频会断会话（假帧 45s 匀速发送验证存活）
+  6. 服务器对 hello-only 空闲会话 ~60-90s 踢（M2 已知），M3 修复 SSL 并发后
+     重连稳定，stt/tts 流程正常触发
 
 ### M4 — 语音链路下行（TTS 播放）
 - audio_play：opus 解码（可能 24k）→ 重采样 → 环形缓冲 → ALSA 播放
