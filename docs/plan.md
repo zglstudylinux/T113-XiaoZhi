@@ -176,10 +176,32 @@ scripts/
   6. 服务器对 hello-only 空闲会话 ~60-90s 踢（M2 已知），M3 修复 SSL 并发后
      重连稳定，stt/tts 流程正常触发
 
-### M4 — 语音链路下行（TTS 播放）
-- audio_play：opus 解码（可能 24k）→ 重采样 → 环形缓冲 → ALSA 播放
-- tts start/sentence_start/stop 状态机、auto 回 listening
-- **验证**：说话 → 喇叭出声回答 + 文本显示 → 确认 → push
+### M4 — 语音链路下行（TTS 播放）✅ 完成（2026-08-26）
+- opus_codec +decoder：按服务器 hello 的 `audio_params.sample_rate`（实测 24k）创建
+- resample：speexdsp 质量 4，24k→48k（播放设备采样率）
+- audio_play：解码队列（30 帧，满丢最老）+ 播放线程；mono→stereo 交织（L=R）
+- xz_protocol：tts start 起播放链 / stop 等 drain 后关设备 / binary 帧喂队列
+- **板上验证**：说话 → 喇叭清晰播出 AI 回复，人声正常无噪声；
+  stt/tts 文本气泡显示；两次连续会话稳定
+- **坑（重要）**：
+  1. **播放必须用 `default` 设备，不能直开 hw:audiocodec**：板上 asound.conf 的
+     标准播放链是 plug→softvol→**dmix**→hw（48k 双声道）。直开 `hw:audiocodec,0`
+     16k mono 实测人声里混明显滋滋噪声（同数据同增益）；走 default 后干净。
+     bt-speaker 项目一直走 default 所以从没暴露。单声道数据需自己交织成 stereo（L=R）
+  2. **空闲底噪**（另一现象）：tts stop 后若播放设备保持打开，DAC 持续加电有持续
+     滋滋声 → tts stop 处理完 drain 后直接 `audio_play_stop()` 关设备，下次 tts start
+     再开（驱动 DAPM 带 ramp 防 pop 时序，实测开关无爆音）
+  3. **ALSA handle 也不允许跨线程并发**（同 M3 SSL 坑）：drain/flush 不能在网络线程
+     调 snd_pcm_drain/drop 与播放线程 writei 并发 → drain 改为"等队列清空 + 300ms
+     尾巴"，flush 只清软件队列
+  4. **underrun 要打日志**：滋滋声排查时先加 underrun 计数确认供数稳定（实测 0），
+     再抓 PCM dump（`DIAG_DUMP_PCM` 编译宏）证明数据干净，才锁定到模拟通路
+  5. **配网页残留 bug**（M1 遗留，本次暴露）：`ui_main_create` 原来直接往
+     `lv_scr_act()`（=配网页）加控件不切屏 → 两层叠显。修复：建独立 screen +
+     `lv_scr_load` + 删旧页。触发路径：字体丢失导致重进配网页后连接成功
+  6. **字体丢失会静默失败**：FreeType 加载失败后所有中文 label 为空（只剩色块），
+     启动 log 有 `freetype font load FAIL` —— UDISK 满时 push 失败可能清掉字体，
+     deploy.sh 的软链回退要留意
 
 ### M5 — 产品化 UI + 收尾
 - 完整聊天界面（用户/AI 气泡、自动滚动、状态、音量、emoji）

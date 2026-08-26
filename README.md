@@ -55,7 +55,12 @@ make -j$(nproc)        # 产物 build/xiaozhi（ARM 硬浮点，动态链接）
   - **SSL 并发坑**：SSL_read 与 SSL_write 并发会破坏 SSL 状态机（表现为假"断连"），
     所有 BIO 读写共持 io_lock 互斥（详见 plan.md M3）
   - 实测：对板说话 → stt 识别一字不差 → AI 回复文本气泡显示
-- [ ] M4：语音下行（TTS opus 解码→喇叭，tts 状态 UI）
+- [x] M4：语音下行（TTS opus 解码→喇叭播放）
+  - 下行链路：ws binary opus → 解码(24k) → speexdsp 重采样(→48k) → ALSA `default`
+    （plug→softvol→dmix→hw，48k 立体声，mono 交织 L=R）→ 喇叭
+  - **播放必须走 `default`**：直开 `hw:audiocodec` 16k mono 有可闻滋滋噪声（模拟
+    通路问题，同数据同增益）；tts stop 后关设备消除空闲底噪
+  - 实测：说话 → 喇叭清晰播出 AI 回复（无噪声）+ 屏幕气泡文本
 - [ ] M5：产品化 UI + 与蓝牙音箱切换 + 开机自启
 
 ## 已知事项

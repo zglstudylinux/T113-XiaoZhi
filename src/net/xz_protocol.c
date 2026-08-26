@@ -12,6 +12,7 @@
 #include "ws_client.h"
 #include "cJSON.h"
 #include "audio_cap.h"
+#include "audio_play.h"
 #include "opus_codec.h"
 
 #include <stdio.h>
@@ -125,6 +126,9 @@ static void *g_cb_user;
 /* OTA 注册结果 */
 static char g_ws_token[192];      /* OTA 下发的 ws token */
 static char g_activation_code[8]; /* 未绑定时的 6 位验证码 */
+
+/* 服务器下行音频参数（hello 里带，实测 24k mono opus 60ms） */
+static int g_srv_audio_rate = 24000;
 
 const char *xz_protocol_session_id(void)
 {
@@ -493,7 +497,17 @@ static void handle_text(const char *json)
         if (sid) {
             snprintf(g_session_id, sizeof(g_session_id), "%s", sid);
             atomic_store(&g_ws_ok, 1);
-            printf("[xz] << hello session_id=%s\n", g_session_id);
+            /* 下行音频参数（M4：解码采样率） */
+            cJSON *ap = cJSON_GetObjectItem(root, "audio_params");
+            int sr = cJSON_GetObjectItem(ap, "sample_rate")
+                     ? cJSON_GetObjectItem(ap, "sample_rate")->valueint : 0;
+            if (sr >= 8000 && sr <= 48000) {
+                if (sr != g_srv_audio_rate)
+                    printf("[xz] srv audio %dHz（旧 %d）\n", sr, g_srv_audio_rate);
+                g_srv_audio_rate = sr;
+            }
+            printf("[xz] << hello session_id=%s audio=%dHz\n",
+                   g_session_id, g_srv_audio_rate);
             if (g_cb) g_cb(XZ_EVT_HELLO_OK, g_session_id, g_cb_user);
         }
     } else if (strcmp(type, "goodbye") == 0) {
@@ -510,8 +524,19 @@ static void handle_text(const char *json)
     } else if (strcmp(type, "tts") == 0) {
         const char *state = cJSON_GetStringValue(cJSON_GetObjectItem(root, "state"));
         if (state && strcmp(state, "start") == 0) {
+            /* M4：起播放链（解码+重采样+ALSA），后续二进制帧喂进来。
+             * 先清残留队列（上一会话被打断/断线留下的旧帧） */
+            audio_play_flush();
+            if (audio_play_start(g_srv_audio_rate) != 0)
+                printf("[xz] audio_play_start fail（TTS 静音）\n");
             if (g_cb) g_cb(XZ_EVT_TTS_START, NULL, g_cb_user);
         } else if (state && strcmp(state, "stop") == 0) {
+            /* 等缓冲播完再回 idle（网络线程阻塞 ≤5s，可接受：
+             * 播放期间服务器只可能继续推本会话音频/新消息） */
+            audio_play_drain();
+            /* 关设备：DAPM 断 DAC/HPOUT 电，消除空闲底噪（滋滋声）。
+             * 驱动带 ramp 防 pop 时序；下次 tts start 重新打开 */
+            audio_play_stop();
             if (g_cb) g_cb(XZ_EVT_TTS_STOP, NULL, g_cb_user);
         } else if (state && strcmp(state, "sentence_start") == 0) {
             const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
@@ -532,7 +557,12 @@ static void on_ws_message(void *user, int binary, const uint8_t *data, size_t le
 {
     (void)user;
     if (binary) {
-        printf("[xz] << binary %zu bytes (M4 再接播放)\n", len);
+        /* M4：服务器下行 opus 帧 → 播放队列 */
+        static int bin_n = 0;
+        bin_n++;
+        if (bin_n == 1 || bin_n % 100 == 0)
+            printf("[xz] << opus #%d %zuB\n", bin_n, len);
+        audio_play_feed(data, (int)len);
         return;
     }
     printf("[xz] << text: %s\n", (const char *)data);
@@ -554,6 +584,8 @@ static void on_ws_event(void *user, int event)
             audio_cap_stop();
             opus_enc_deinit();
         }
+        /* 正在播放则丢弃余音（连接已断，避免 drain 卡 5s） */
+        audio_play_stop();
         if (g_cb) g_cb(XZ_EVT_DISCONNECTED, NULL, g_cb_user);
     }
 }

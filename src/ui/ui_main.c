@@ -34,7 +34,14 @@ static void talk_btn_event(lv_event_t *e);
 
 void ui_main_create(void)
 {
-    lv_obj_t *scr = lv_scr_act();
+    /* 建独立 screen 并切换：若从配网页进入（wifi_setup_done_cb），
+     * lv_scr_act() 还是配网页——直接在上面加控件会把两层叠着显示 */
+    lv_obj_t *scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x101418), 0);
+    lv_obj_t *prev = lv_scr_act();
+    lv_scr_load(scr);
+    if (prev && prev != scr)
+        lv_obj_del(prev);    /* 旧页（启动页/配网页）删除 */
 
     /* 标题 */
     lv_obj_t *title = lv_label_create(scr);
