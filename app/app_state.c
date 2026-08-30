@@ -2,7 +2,7 @@
  * app_state.c — 小智设备状态机（M0 骨架：仅记录 + 通知 UI）
  */
 #include "app_state.h"
-#include "ui/ui_main.h"
+#include "ui_main.h"
 #include <stdatomic.h>
 #include <string.h>
 

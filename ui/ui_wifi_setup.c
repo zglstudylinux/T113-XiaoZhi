@@ -16,7 +16,7 @@
 #include "ui_menu.h"
 #include "ui_navigate.h"
 #include "ui_msg.h"
-#include "../wifi/wifi_manager.h"
+#include "wifi_manager.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

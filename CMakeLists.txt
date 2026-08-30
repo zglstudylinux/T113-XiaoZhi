@@ -31,11 +31,12 @@ add_compile_options(-Wall -Wno-unused-function -Wno-unused-parameter
 add_compile_definitions(LV_USE_PNG=1 LV_USE_FS_POSIX=1)
 
 include_directories(
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/net
-    ${CMAKE_SOURCE_DIR}/src/audio
-    ${CMAKE_SOURCE_DIR}/src/wifi
-    ${CMAKE_SOURCE_DIR}/src/ui
+    ${CMAKE_SOURCE_DIR}/main
+    ${CMAKE_SOURCE_DIR}/app
+    ${CMAKE_SOURCE_DIR}/app/net
+    ${CMAKE_SOURCE_DIR}/app/audio
+    ${CMAKE_SOURCE_DIR}/app/wifi
+    ${CMAKE_SOURCE_DIR}/ui
     ${CMAKE_SOURCE_DIR}/third_party            # "lvgl/lvgl.h"、"lv_drv_conf.h"
     ${CMAKE_SOURCE_DIR}/third_party/lvgl/src/extra/libs/freetype
     ${CMAKE_SOURCE_DIR}/third_party/freetype/include
@@ -45,10 +46,10 @@ include_directories(
 
 # ---- 第三方 ----
 # lvgl 8.3.1：仓库只有 lvgl.mk（上游 CMakeLists 已删），自写 GLOB 等价编译。
-# lv_conf.h 在 src/，__has_include("lv_conf.h") 自动启用 LV_CONF_INCLUDE_SIMPLE。
+# lv_conf.h 在 ui/，__has_include("lv_conf.h") 自动启用 LV_CONF_INCLUDE_SIMPLE。
 file(GLOB_RECURSE LVGL_SRC CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/third_party/lvgl/src/*.c)
 add_library(lvgl STATIC ${LVGL_SRC})
-target_include_directories(lvgl PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(lvgl PUBLIC ${CMAKE_SOURCE_DIR}/ui)
 
 # lv_drivers：只编 display/indev（sdl/wayland/gtkdrv/win32drv 被 lv_drv_conf 守卫清空，
 # host 平台显式加 sdl 两文件）；lv_drv_conf.h 由 third_party include 路径提供。
@@ -66,13 +67,14 @@ target_compile_definitions(lv_drivers PRIVATE
 
 add_library(cjson STATIC ${CMAKE_SOURCE_DIR}/third_party/cjson/cJSON.c)
 
-# ---- 应用源码（P1 阶段 src/ 布局原样不动）----
+# ---- 应用源码（新分层布局）----
 file(GLOB APP_SRC
-    ${CMAKE_SOURCE_DIR}/src/*.c
-    ${CMAKE_SOURCE_DIR}/src/net/*.c
-    ${CMAKE_SOURCE_DIR}/src/audio/*.c
-    ${CMAKE_SOURCE_DIR}/src/wifi/*.c
-    ${CMAKE_SOURCE_DIR}/src/ui/*.c)
+    ${CMAKE_SOURCE_DIR}/main/*.c
+    ${CMAKE_SOURCE_DIR}/app/*.c
+    ${CMAKE_SOURCE_DIR}/app/net/*.c
+    ${CMAKE_SOURCE_DIR}/app/audio/*.c
+    ${CMAKE_SOURCE_DIR}/app/wifi/*.c
+    ${CMAKE_SOURCE_DIR}/ui/*.c)
 
 add_executable(xiaozhi ${APP_SRC})
 target_link_libraries(xiaozhi PRIVATE lvgl lv_drivers cjson
