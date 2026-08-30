@@ -17,7 +17,11 @@ WiFi 联网，点按开始说话，服务器 ASR/LLM/TTS，板子喇叭回答，
 ├── scripts/test_alsa.sh   # 板上录音自检
 ├── third_party/           # lvgl 8.3.1 / lv_drivers / freetype（vendored）
 ├── assets/fonts/          # 思源黑体 .otf
+├── assets/images/         # UI 素材 PNG（tools/gen_assets.py 生成）
 ├── src/                   # 应用源码（net/audio/wifi/ui 模块化）
+│   └── ui/                # ui_navigate 切屏管理 / ui_menu 菜单 /
+│                          # ui_face 表情脸 / ui_msg 线程→UI 消息队列
+├── tools/gen_assets.py    # PIL 素材生成器（背景+表情脸+菜单图标）
 └── docs/plan.md           # 项目计划（里程碑与踩坑记录）
 ```
 
@@ -61,7 +65,18 @@ make -j$(nproc)        # 产物 build/xiaozhi（ARM 硬浮点，动态链接）
   - **播放必须走 `default`**：直开 `hw:audiocodec` 16k mono 有可闻滋滋噪声（模拟
     通路问题，同数据同增益）；tts stop 后关设备消除空闲底噪
   - 实测：说话 → 喇叭清晰播出 AI 回复（无噪声）+ 屏幕气泡文本
-- [ ] M5：产品化 UI + 与蓝牙音箱切换 + 开机自启
+- [x] M5：产品化 UI + 界面导航（2026-08-30）
+  - **卡通表情界面**：夜空背景 + 机器人表情脸（`tools/gen_assets.py` PIL 生成，
+    18 张脸：待命/聆听声波环/思考/说话嘴型动画 + 8 种情绪，随设备状态与
+    服务器 llm 情绪实时切换）+ 半透明聊天气泡 + 胶囊说话按钮
+  - **界面导航**：启动菜单页（AI 小智 / WiFi 设置，可扩展）；统一切屏管理
+    `ui_navigate`（leave 回调 + auto_del，防界面重叠）；各页返回按钮
+  - **状态感知**：无 WiFi 显示"未连接 WiFi"+一键去配网；未绑定设备大字显示
+    6 位验证码；配网页键盘选中网络后才弹出
+  - **稳定性大修**（gdb + core dump 定位）：`lv_async_call` 非线程安全（LVGL 堆
+    并发分配损坏）→ 线程消息改走 `ui_msg` 互斥队列；修复扫描消息 free 静态缓存
+    导致的堆损坏；修复菜单/配网路径协议线程未启动
+- [ ] M5 剩余：与蓝牙音箱切换 + 开机自启
 
 ## 已知事项
 

@@ -9,10 +9,13 @@
 #include "lvgl/lvgl.h"
 #include "lv_drivers/display/sunxifb.h"
 #include "lv_drivers/indev/evdev.h"
+#include "lvgl/src/extra/libs/png/lv_png.h"
 #include "lv_freetype.h"
 #include "app_state.h"
+#include "ui/ui_navigate.h"
+#include "ui/ui_msg.h"
 #include "ui/ui_main.h"
-#include "ui/ui_wifi_setup.h"
+#include "ui/ui_menu.h"
 #include "wifi/wifi_manager.h"
 #include "net/xz_protocol.h"
 #include <unistd.h>
@@ -28,6 +31,7 @@
 #define FONT_CN_REGULAR  BOARD_RES_PATH "/fonts/SOURCEHANSANSCN_REGULAR.OTF"
 
 /* UI 用字体（ui_main.c extern 引用） */
+lv_font_t *ui_font_cn_24;
 lv_font_t *ui_font_cn_32;
 lv_font_t *ui_font_cn_48;
 
@@ -52,13 +56,11 @@ uint32_t custom_tick_get(void)
  * 后台线程：wifi_manager_open（加载驱动+起 wpa_supplicant，可能 5~10s）
  *   → 有保存配置则 auto_connect → 成功进主页 / 失败进配网页
  *   → 无配置直接进配网页
- * 结果经 lv_async_call 切 UI（线程安全）。 */
+ * 结果经 ui_msg_post 投递到主循环执行（lv_async 非线程安全）。 */
 
 typedef struct { int ok; } wifi_boot_msg_t;
 
-void wifi_setup_done_cb(int connected);
-
-/* ===== 小智协议事件（协议线程调用 → lv_async_call 转 UI） ===== */
+/* ===== 小智协议事件（协议线程调用 → ui_msg_post 转主循环） ===== */
 
 typedef struct { int evt; char data[512]; } xz_evt_msg_t;
 
@@ -67,8 +69,9 @@ static void xz_evt_async(void *p)
     xz_evt_msg_t *m = (xz_evt_msg_t *)p;
     switch (m->evt) {
     case XZ_EVT_ACTIVATION:
-        ui_main_on_server_info("设备未绑定，验证码：", m->data);
-        app_state_set(XZ_STATE_IDLE, "activation code");
+        /* 未绑定设备：验证码大字屏显 + 信息行提示去控制台绑定 */
+        ui_main_on_server_info("请到 xiaozhi.me 控制台输入验证码绑定设备", "");
+        ui_main_show_activation(m->data);
         break;
     case XZ_EVT_HELLO_OK:
         ui_main_on_server_info("服务器已连接", m->data);
@@ -98,6 +101,9 @@ static void xz_evt_async(void *p)
     case XZ_EVT_TTS_STOP:
         app_state_set(XZ_STATE_IDLE, "tts stop");
         break;
+    case XZ_EVT_EMOTION:
+        ui_face_set_emotion(m->data);
+        break;
     default:
         break;
     }
@@ -111,16 +117,39 @@ static void xz_evt_cb(int event, const char *data, void *user)
     if (!m) return;
     m->evt = event;
     snprintf(m->data, sizeof(m->data), "%s", data ? data : "");
-    lv_async_call(xz_evt_async, m);
+    ui_msg_post(xz_evt_async, m);
 }
 
-/* WiFi 就绪后启动协议（连 xiaozhi.me，未绑定设备由服务器下发验证码） */
+/* WiFi 就绪后启动协议（连 xiaozhi.me，未绑定设备由服务器下发验证码）。
+ * 幂等：已在跑则不重复启动（反复进出小智页都安全） */
 static void xiaozhi_start(void)
 {
+    if (xz_protocol_started())
+        return;
     if (xz_protocol_start(xz_evt_cb, NULL) == 0) {
         app_state_set(XZ_STATE_CONNECTING, "ws connecting");
         ui_main_on_server_info("连接服务器中…", "");
     }
+}
+
+/* 小智页 → 配网页 → 连接成功（主线程）：回小智页并确保协议在跑 */
+void xz_app_wifi_setup_done(int connected)
+{
+    printf("[main] wifi_setup_done connected=%d\n", connected);
+    if (connected) {
+        ui_nav_go(ui_main_create);
+        app_state_init();
+        xiaozhi_start();
+    }
+}
+
+/* UI 层入口：进入小智页时确保协议已启动（幂等）。
+ * 覆盖所有进入路径：开机直进 / 菜单点入 / 配网成功跳入 */
+void xz_app_ensure_protocol(void)
+{
+    if (wifi_manager_state() != WIFI_STATE_CONNECTED)
+        return;
+    xiaozhi_start();
 }
 
 static lv_obj_t *g_boot_scr;        /* 启动过渡页 */
@@ -130,11 +159,13 @@ static void wifi_boot_done(void *p)
 {
     wifi_boot_msg_t *m = (wifi_boot_msg_t *)p;
     if (m->ok) {
-        ui_main_create();
+        /* WiFi 已就绪：直达小智页，连接成功即可对话 */
+        ui_nav_go(ui_main_create);
         app_state_init();
         xiaozhi_start();
     } else {
-        ui_wifi_setup_create(wifi_setup_done_cb);
+        /* 自动重连失败：进菜单页（可去 WiFi 设置手动配网） */
+        ui_nav_go(ui_menu_create);
     }
     free(m);
 }
@@ -155,7 +186,7 @@ static void *wifi_boot_thread(void *arg)
     } else {
         printf("[main] wifi_manager_open 失败，进配网页\n");
     }
-    lv_async_call(wifi_boot_done, m);
+    ui_msg_post(wifi_boot_done, m);
     return NULL;
 }
 
@@ -203,7 +234,8 @@ int main(int argc, char *argv[])
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x101418), 0);
 
-    /* FreeType 中文字体（运行时加载 .otf） */
+    /* PNG 解码器（M5 表情脸/背景素材）+ FreeType 中文字体 */
+    lv_png_init();
     lv_freetype_init(4, 4, 128 * 1024);
     static lv_ft_info_t ft48 = {
         .name = FONT_CN_REGULAR,
@@ -215,12 +247,21 @@ int main(int argc, char *argv[])
         .weight = 32,
         .style = FT_FONT_STYLE_NORMAL,
     };
-    if (lv_ft_font_init(&ft48) && lv_ft_font_init(&ft32)) {
+    static lv_ft_info_t ft24 = {
+        .name = FONT_CN_REGULAR,
+        .weight = 24,
+        .style = FT_FONT_STYLE_NORMAL,
+    };
+    if (lv_ft_font_init(&ft48) && lv_ft_font_init(&ft32)
+        && lv_ft_font_init(&ft24)) {
         ui_font_cn_48 = ft48.font;
         ui_font_cn_32 = ft32.font;
+        ui_font_cn_24 = ft24.font;
     } else {
         printf("freetype font load FAIL: %s\n", FONT_CN_REGULAR);
     }
+
+    ui_msg_init();   /* 线程→UI 消息泵（lv_async 非线程安全，见 ui_msg.h） */
 
     /* ===== 启动过渡页 + WiFi 后台初始化（M1） ===== */
     g_boot_scr = lv_obj_create(NULL);
@@ -247,17 +288,7 @@ int main(int argc, char *argv[])
     wifi_manager_close();
     lv_ft_font_destroy(ui_font_cn_48);
     lv_ft_font_destroy(ui_font_cn_32);
+    lv_ft_font_destroy(ui_font_cn_24);
     sunxifb_exit();
     return 0;
-}
-
-/* 配网页完成回调（主线程）：连接成功 → 进主界面 */
-void wifi_setup_done_cb(int connected)
-{
-    printf("[main] wifi_setup_done connected=%d\n", connected);
-    if (connected) {
-        ui_main_create();
-        app_state_init();
-        xiaozhi_start();
-    }
 }

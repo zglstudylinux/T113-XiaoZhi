@@ -203,11 +203,53 @@ scripts/
      启动 log 有 `freetype font load FAIL` —— UDISK 满时 push 失败可能清掉字体，
      deploy.sh 的软链回退要留意
 
-### M5 — 产品化 UI + 收尾
-- 完整聊天界面（用户/AI 气泡、自动滚动、状态、音量、emoji）
+### M5 — 产品化 UI（方案 B 卡通形象）+ 界面导航重构 ✅ 完成（2026-08-30）
+
+#### M5a 产品化界面（表情脸 + 夜空背景）
+- 素材全部 PIL 程序化生成（`tools/gen_assets.py`，无版权素材，脚本+产物入 git）：
+  夜空渐变背景（星光+光晕）+ 机器人脸 18 张（300×300，2× 超采样抗锯齿）：
+  idle / listening×3（声波环动画）/ thinking×3 / speaking×3（嘴型动画）
+  + 8 情绪（happy laughing sad crying angry surprised loving sleepy）
+- ui_face：lv_img + lv_timer 轮播换 src（lv_animimg 只支持 RAM 驻留 dsc，文件路径
+  走不了）；状态脸优先于情绪脸（listening/speaking 中 llm 情绪不覆盖）
+- 协议层接 `llm {"type":"llm","text":"happy"}` → `XZ_EVT_EMOTION` → idle 态切情绪脸
+- ui_main 重排：全屏背景图 / 半透明圆角聊天气泡（行容器包裹实现左右对齐——
+  flex 列布局忽略子项 align）/ 胶囊发光说话按钮 / 空聊天区隐藏
+- `LV_IMG_CACHE_DEF_SIZE` 0→4（PNG 重解码慢，缓存背景+当前帧）
+- **坑**：FreeType 中文字体没有 LVGL 内置符号字形（LV_SYMBOL_WIFI/REFRESH、
+  键盘 ⌫⏎⇧）——全渲染成方框。方案：业务图标用 PNG 素材或中文文字；
+  lv_keyboard 保持默认 Montserrat 字体（符号字形齐全）
+
+#### M5b 界面导航重构（菜单页 + 防重叠）
+- `ui_navigate`：统一切屏入口。leave 回调（页面 create 时注册：停 lv_timer、
+  静态指针置空、置 g_page_gone）→ `lv_scr_load_anim(..., auto_del=true)` 删旧屏。
+  手写"load 后立即删"会删到未激活的当前屏（按钮消失）；
+  async 延迟删在快速切换下 use-after-free
+- ui_menu 启动菜单页（图标卡片按钮，g_pages[] 加一行即可扩展）
+- 小智页无 WiFi 态：状态行"未连接 WiFi"+黄字指引+按钮变"去连 WiFi"
+  （不再误导性显示"点按下方说话"）；配网页键盘初始隐藏（选中网络才弹出）
+- 未绑定设备：状态行大字黄显"验证码 XXXXXX"+信息行提示去 xiaozhi.me 绑定
+- **坑（核心大坑，gdb+core dump 定位）**：
+  1. **`lv_async_call` 不是线程安全的**：内部 `lv_mem_alloc`+`lv_timer_create`，
+     工作线程（协议/扫描/连接）与主循环并发分配 LVGL 堆 → tlsf 元数据写坏 →
+     随机 SIGSEGV（崩在 lv_async_timer_cb）。反复切页压测必现。
+     修复：`ui_msg` 互斥队列（线程只 malloc 自带消息，主循环 20ms 泵定时器消费），
+     所有线程侧 `lv_async_call` 全部替换
+  2. **free 静态缓存指针**：配网页扫描结果用静态 `g_scan_cache`，丢弃分支
+     `free(m)` free 了静态区 → glibc 堆损坏 → 下次 malloc/free 崩（崩在 free+0xEC）。
+     换页后迟到的 async 回调 free 前必须分清堆/静态消息
+  3. **协议线程未启动的路径**：只有"开机自动重连成功"会 start 协议；菜单进小智、
+     配网成功进小智都不起协议 → 永远显示"未连接服务器"。修复：
+     `xz_app_ensure_protocol()` 幂等启动（`xz_protocol_started()` 判断），进小智页统一调用
+  4. core dump 定位法：start-stop-daemon 启动包一层 `ulimit -c unlimited`
+     （core_pattern /tmp/%e.%t.%p.%s.core），交叉 gdb 看 bt；
+     libc 内崩溃用 `nm -D` 按偏移定位符号（本次 = free）
+- **验证**：触摸注入压测（py 直写 /dev/input/event4 二进制 input_event）：
+  标准切页循环 10 轮 + 随机乱点 60 次全存活；用户手动测试通过
+
+### M5 剩余（下一步）
 - 与 bt_speaker 切换（app_switcher / 开机 chooser / rc.final 自启）
-- README/docs 收尾、config.ini 参数化（可换自建服务器）
-- **验证**：重启自动进小智界面，与蓝牙音箱可切换 → 确认 → push
+- config.ini 参数化说明（可换自建服务器）、README 收尾
 
 ## 关键风险与预案
 

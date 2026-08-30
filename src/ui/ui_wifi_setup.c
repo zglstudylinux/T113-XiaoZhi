@@ -13,6 +13,9 @@
  */
 #include "ui_wifi_setup.h"
 #include "ui_main.h"
+#include "ui_menu.h"
+#include "ui_navigate.h"
+#include "ui_msg.h"
 #include "../wifi/wifi_manager.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +31,14 @@ static lv_obj_t *g_status;          /* 状态行 */
 static lv_obj_t *g_psw_win;         /* 密码弹窗 */
 static lv_obj_t *g_psw_ta;
 static lv_obj_t *g_kb;
+static int g_page_gone = 0;         /* 页已被导航销毁：线程回调直接丢弃 */
+
+/* 离开回调（ui_nav_go 切屏前调用）：指针置空，迟到的 async 丢弃 */
+static void wifi_setup_leave(void)
+{
+    g_page_gone = 1;
+    g_scr = g_list = g_status = g_psw_win = g_psw_ta = g_kb = NULL;
+}
 static char g_sel_ssid[33];
 static uint8_t g_sel_open;
 typedef struct { int count; wifi_ap_t aps[WIFI_MAX_AP]; } scan_msg_t_;
@@ -41,11 +52,19 @@ static void retry_ev_cb(lv_event_t *e);
 static void ap_click_ev_cb(lv_event_t *e);
 static void start_scan(void);
 
+static void back_btn_event(lv_event_t *e)
+{
+    (void)e;
+    ui_nav_go(ui_menu_create);      /* 回菜单页（leave 回调已置 g_page_gone） */
+}
+
 /* ---------- 扫描结果回 UI ---------- */
 
 static void do_scan_async(void *p)
 {
     scan_msg_t_ *m = (scan_msg_t_ *)p;
+    if (g_page_gone || g_list == NULL)          /* 页已切走：丢弃（静态缓存，不 free） */
+        return;
     lv_obj_clean(g_list);                       /* 清掉"扫描中"占位 */
 
     if (m->count <= 0) {
@@ -71,12 +90,10 @@ static void do_scan_async(void *p)
         lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 8, 0);
         lv_label_set_text(lbl, ap->ssid);
         lv_obj_t *sig = lv_label_create(btn);
-        lv_obj_set_style_text_font(sig, ui_font_cn_32, 0);
-        lv_obj_align(sig, LV_ALIGN_RIGHT_MID, -8, 0);
-        snprintf(line, sizeof(line), "%s%s",
-                 LV_SYMBOL_WIFI,
-                 ap->auth_open ? " ∅" : "");
-        lv_label_set_text(sig, line);
+        lv_obj_set_style_text_font(sig, ui_font_cn_24, 0);
+        lv_obj_set_style_text_color(sig, lv_color_hex(0xD7E3EF), 0);
+        lv_obj_align(sig, LV_ALIGN_RIGHT_MID, -12, 0);
+        lv_label_set_text(sig, ap->auth_open ? "开放" : "加密");
         lv_obj_add_event_cb(btn, ap_click_ev_cb, LV_EVENT_CLICKED,
                             (void *)ap);
     }
@@ -88,7 +105,7 @@ static void *scan_thread(void *arg)
     (void)arg;
     scan_msg_t_ *m = &g_scan_cache;
     m->count = wifi_manager_scan(m->aps, WIFI_MAX_AP);
-    lv_async_call(do_scan_async, m);
+    ui_msg_post(do_scan_async, m);
     return NULL;
 }
 
@@ -110,6 +127,10 @@ static void start_scan(void)
 static void conn_done_async(void *p)
 {
     conn_msg_t *m = (conn_msg_t *)p;
+    if (g_page_gone || g_status == NULL) {
+        free(m);
+        return;
+    }
     if (m->result == 0) {
         char txt[96];
         snprintf(txt, sizeof(txt), "已连接 %s\nIP: %s", g_sel_ssid, m->ip);
@@ -140,7 +161,7 @@ static void *connect_thread(void *arg)
     snprintf(m->ip, sizeof(m->ip), "%s", ip ? ip : "?");
     if (m->result == 0)
         wifi_manager_save_cfg(g_sel_ssid, psk);
-    lv_async_call(conn_done_async, m);
+    ui_msg_post(conn_done_async, m);
     return NULL;
 }
 
@@ -250,26 +271,41 @@ static void create_psw_win(lv_obj_t *parent)
 
 /* ---------- 页面 ---------- */
 
-void ui_wifi_setup_create(void (*on_done)(int connected))
+void ui_wifi_setup_create_ex(lv_obj_t *scr, void (*on_done)(int connected))
 {
     g_on_done = on_done;
+    g_page_gone = 0;
 
-    g_scr = lv_obj_create(NULL);
+    g_scr = scr;
     lv_obj_set_style_bg_color(g_scr, lv_color_hex(0x101418), 0);
-    lv_scr_load(g_scr);
+    ui_nav_set_leave_cb(wifi_setup_leave);
+
+    /* 左上返回按钮（回菜单页） */
+    lv_obj_t *back = lv_btn_create(g_scr);
+    lv_obj_set_size(back, 108, 52);
+    lv_obj_align(back, LV_ALIGN_TOP_LEFT, 16, 14);
+    lv_obj_set_style_bg_color(back, lv_color_hex(0x223042), 0);
+    lv_obj_set_style_radius(back, 26, 0);
+    lv_obj_set_style_shadow_width(back, 0, 0);
+    lv_obj_add_event_cb(back, back_btn_event, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *back_lbl = lv_label_create(back);
+    lv_obj_set_style_text_font(back_lbl, ui_font_cn_24, 0);
+    lv_obj_set_style_text_color(back_lbl, lv_color_hex(0x8FA3B8), 0);
+    lv_label_set_text(back_lbl, "返回");
+    lv_obj_center(back_lbl);
 
     lv_obj_t *title = lv_label_create(g_scr);
     lv_obj_set_style_text_font(title, ui_font_cn_48, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_label_set_text(title, "WiFi 设置");
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 20, 16);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 140, 16);
 
     lv_obj_t *refresh = lv_btn_create(g_scr);
     lv_obj_set_size(refresh, 100, 56);
     lv_obj_align(refresh, LV_ALIGN_TOP_RIGHT, -16, 10);
     lv_obj_t *rl = lv_label_create(refresh);
-    lv_obj_set_style_text_font(rl, ui_font_cn_32, 0);
-    lv_label_set_text(rl, LV_SYMBOL_REFRESH);
+    lv_obj_set_style_text_font(rl, ui_font_cn_24, 0);
+    lv_label_set_text(rl, "刷新");
     lv_obj_center(rl);
     lv_obj_add_event_cb(refresh, retry_ev_cb, LV_EVENT_CLICKED, NULL);
 
@@ -294,7 +330,9 @@ void ui_wifi_setup_create(void (*on_done)(int connected))
     g_kb = lv_keyboard_create(g_scr);
     lv_obj_set_size(g_kb, 480, 240);
     lv_obj_align(g_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_text_font(g_kb, ui_font_cn_32, 0);
+    /* 不设 FreeType 字体：键盘的退格/回车/shift 是 LVGL 内置符号，
+     * 默认 Montserrat 14 才有这些字形（中文字体全渲染成方框） */
+    lv_obj_add_flag(g_kb, LV_OBJ_FLAG_HIDDEN);   /* 选中网络后才弹出 */
 
     start_scan();
 }

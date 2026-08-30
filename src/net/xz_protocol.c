@@ -130,6 +130,11 @@ static char g_activation_code[8]; /* 未绑定时的 6 位验证码 */
 /* 服务器下行音频参数（hello 里带，实测 24k mono opus 60ms） */
 static int g_srv_audio_rate = 24000;
 
+int xz_protocol_started(void)
+{
+    return atomic_load(&g_run);
+}
+
 const char *xz_protocol_session_id(void)
 {
     return g_ws_ok ? g_session_id : NULL;
@@ -542,8 +547,12 @@ static void handle_text(const char *json)
             const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
             if (g_cb) g_cb(XZ_EVT_TTS_SENTENCE, text ? text : "", g_cb_user);
         }
+    } else if (strcmp(type, "llm") == 0) {
+        /* AI 情绪（happy/laughing/sad/...）→ 表情脸 */
+        const char *emo = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
+        if (g_cb && emo && emo[0]) g_cb(XZ_EVT_EMOTION, emo, g_cb_user);
     } else {
-        /* llm/system/mcp 等：M2 阶段只打 log */
+        /* system/mcp 等：只打 log */
         printf("[xz] << %s: %.200s\n", type, json);
     }
     cJSON_Delete(root);

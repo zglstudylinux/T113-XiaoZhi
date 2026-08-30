@@ -22,6 +22,7 @@ enum {
     XZ_EVT_DISCONNECTED,    /* 连接断开 */
     XZ_EVT_CONNECTED,       /* ws 已连上（hello 前） */
     XZ_EVT_ACTIVATION,      /* OTA 注册返回验证码：data=6 位码 */
+    XZ_EVT_EMOTION,         /* llm 情绪：data=情绪串（happy/sad/...） */
 };
 
 /* 后台线程启动连接（读 /mnt/UDISK/xiaozhi/config.ini；无则用默认）。
@@ -31,6 +32,9 @@ void xz_protocol_stop(void);
 
 /* 当前 session_id（未握手为 NULL） */
 const char *xz_protocol_session_id(void);
+
+/* 协议线程是否已启动（幂等启动判断用） */
+int  xz_protocol_started(void);
 
 /* ---- M3/M4 用 ---- */
 int xz_protocol_send_listen_start(void);   /* listen start(auto) */

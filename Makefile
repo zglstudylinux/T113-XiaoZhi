@@ -53,7 +53,8 @@ MAINSRC = ./src/main.c ./src/app_state.c \
 	./src/audio/audio_cap.c ./src/audio/audio_play.c \
 	./src/audio/opus_codec.c ./src/audio/resample.c \
 	./src/wifi/wifi_manager.c \
-	./src/ui/ui_main.c ./src/ui/ui_wifi_setup.c
+	./src/ui/ui_main.c ./src/ui/ui_face.c ./src/ui/ui_menu.c \
+	./src/ui/ui_navigate.c ./src/ui/ui_msg.c ./src/ui/ui_wifi_setup.c
 
 include $(LVGL_DIR)/lvgl/lvgl.mk
 include $(LVGL_DIR)/lv_drivers/lv_drivers.mk

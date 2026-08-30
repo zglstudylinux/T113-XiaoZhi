@@ -32,6 +32,10 @@ echo "[deploy] 推送配置 config.ini（板上已有则不覆盖）..."
 $ADB shell "[ -f /mnt/UDISK/xiaozhi/config.ini ] || echo MISSING" | grep -q MISSING && \
     $ADB push "$PROJ_DIR/assets/config.ini" /mnt/UDISK/xiaozhi/config.ini || true
 
+echo "[deploy] 推送 UI 素材图片（背景+表情脸，~300KB）..."
+$ADB shell mkdir -p /mnt/UDISK/xiaozhi/images
+$ADB push "$PROJ_DIR/assets/images/." /mnt/UDISK/xiaozhi/images/
+
 echo "[deploy] 推送字体（若 UDISK 空间不足则软链共享 speaker 的字体）..."
 $ADB shell mkdir -p /mnt/UDISK/xiaozhi/fonts
 $ADB push "$PROJ_DIR/assets/fonts/." /mnt/UDISK/xiaozhi/fonts/ 2>/dev/null || \
