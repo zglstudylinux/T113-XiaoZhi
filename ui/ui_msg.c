@@ -3,7 +3,7 @@
  */
 #include "ui_msg.h"
 #include "lvgl/lvgl.h"
-#include <pthread.h>
+#include "osal/osal_mutex.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -16,7 +16,8 @@ typedef struct {
 
 static msg_t  g_q[Q_MAX];
 static int    g_head, g_tail, g_count;
-static pthread_mutex_t g_mtx = PTHREAD_MUTEX_INITIALIZER;
+/* g_mtx 在 ui_msg_init 显式初始化（osal 动态分配） */
+static osal_mutex_t g_mtx;
 static lv_timer_t *g_pump;
 static int g_inited;
 
@@ -25,15 +26,15 @@ static void pump_cb(lv_timer_t *t)
 {
     (void)t;
     for (;;) {
-        pthread_mutex_lock(&g_mtx);
+        osal_mutex_lock(g_mtx);
         if (g_count == 0) {
-            pthread_mutex_unlock(&g_mtx);
+            osal_mutex_unlock(g_mtx);
             return;
         }
         msg_t m = g_q[g_head];
         g_head = (g_head + 1) % Q_MAX;
         g_count--;
-        pthread_mutex_unlock(&g_mtx);
+        osal_mutex_unlock(g_mtx);
         m.cb(m.user);
     }
 }
@@ -42,7 +43,7 @@ int ui_msg_post(ui_msg_cb_t cb, void *user)
 {
     if (!g_inited)
         return -1;
-    pthread_mutex_lock(&g_mtx);
+    osal_mutex_lock(g_mtx);
     if (g_count >= Q_MAX) {
         /* 队满丢最旧（UI 消息取最新状态即可） */
         g_head = (g_head + 1) % Q_MAX;
@@ -52,13 +53,14 @@ int ui_msg_post(ui_msg_cb_t cb, void *user)
     g_q[g_tail].user = user;
     g_tail = (g_tail + 1) % Q_MAX;
     g_count++;
-    pthread_mutex_unlock(&g_mtx);
+    osal_mutex_unlock(g_mtx);
     return 0;
 }
 
 void ui_msg_init(void)
 {
     g_head = g_tail = g_count = 0;
+    g_mtx = osal_mutex_new();
     g_inited = 1;
     g_pump = lv_timer_create(pump_cb, 20, NULL);
 }

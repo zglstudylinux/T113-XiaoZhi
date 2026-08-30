@@ -16,7 +16,8 @@ extern "C" {
 #define OSAL_SOCK_INVALID (-1)
 typedef int osal_sock_t;
 
-/* getaddrinfo + 非阻塞 connect + 轮询等待（等价 ws_client 原实现） */
+/* getaddrinfo + 非阻塞 connect + 轮询等待（等价 ws_client 原实现）。
+ * 连上后自动设 5s 收发超时（SO_RCVTIMEO/SO_SNDTIMEO，原 OTA/ws 行为） */
 int osal_net_tcp_connect(const char *host, const char *port,
                          uint32_t timeout_ms, osal_sock_t *out);
 /* 全量写（EINTR 重试）；>0 成功 */

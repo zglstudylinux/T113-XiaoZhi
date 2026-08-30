@@ -1,45 +1,37 @@
 /*
- * ws_client.c — WebSocket 客户端实装（RFC6455 over OpenSSL BIO）
+ * ws_client.c — WebSocket 客户端实装（RFC6455，传输走 OSAL：osal_net + osal_tls）
  *
  * 设计要点：
- * - wss 走 SSL_CTX + SSL_connect（SNI 按主机名设置）；
- *   ws:// 明文走 BIO_new_connect。
+ * - wss 走 osal_tls（SNI 按主机名设置）；ws:// 明文直走 osal_net。
  * - 客户端→服务器帧必须 MASK（RFC6455 §5.3），掩码用 rand()。
- * - 收包循环阻塞在 BIO_read，靠 nbio + should_retry 超时让步，
+ * - 收包循环阻塞在 osal_tls_read/osal_net_recv，靠 poll 空闲让步，
  *   使 close 标志能被感知。
  * - ping 自动回 pong；close 帧回 close 并退出。
  * - 发送用互斥锁（JSON 线程与音频上行线程并发）。
  */
 #include "ws_client.h"
 
+#include "osal/osal_net.h"
+#include "osal/osal_tls.h"
+#include "osal/osal_mutex.h"
+#include "osal/osal_time.h"
+#include "osal/osal_log.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <poll.h>
-#include <time.h>
-#include <pthread.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <openssl/ssl.h>
-#include <openssl/bio.h>
-#include <openssl/err.h>
 
 #define WS_RCV_BUF_MAX   (256 * 1024)   /* 单帧上限（JSON/opus 都远小于此） */
+#define TAG "ws"
 
 /* ---------------- 状态 ---------------- */
 
 typedef struct {
-    BIO          *bio;
-    SSL          *ssl;        /* wss 时非 NULL */
-    SSL_CTX      *ssl_ctx;
-    int           sock;       /* 原生 socket fd（poll 用） */
+    osal_sock_t   sock;
+    osal_tls_t   *tls;        /* wss 时非 NULL */
     int           connected;
-    pthread_mutex_t io_lock;  /* SSL 对象非线程安全：读/写互斥（tx_lock 更名） */
+    osal_mutex_t  io_lock;    /* TLS 对象非线程安全：读/写互斥（tx_lock 更名） */
     volatile int  closing;
     ws_on_message_t on_msg;
     ws_on_event_t   on_evt;
@@ -58,73 +50,60 @@ int ws_client_is_connected(void) { return g_ctx.connected; }
 
 /* ---------------- 底层读写 ----------------
  *
- * SSL 对象不是线程安全的：ws 线程 SSL_read 与 capture 线程 SSL_write
- * 并发会破坏 SSL 内部状态机（实测症状：SSL_read 返回 SYSCALL+errno=EAGAIN
- * 的假"断连"，M3 上行音频时必现）。所有 BIO 读/写都持 io_lock。
+ * TLS 对象不是线程安全的：ws 线程读与 capture 线程写并发会破坏
+ * SSL 内部状态机（实测症状：读返回 SYSCALL+errno=EAGAIN 的假"断连"，
+ * M3 上行音频时必现）。所有读/写都持 io_lock。
  * 读路径先 poll socket 可读（不持锁），可读才持锁短读，
- * 避免持锁等 1s SO_RCVTIMEO 把写线程饿死。
+ * 避免持锁阻塞把写线程饿死。
  */
 
-static int bio_write_all(const uint8_t *data, size_t len)
+static int io_write_all(const uint8_t *data, size_t len)
 {
     size_t off = 0;
     int retry = 0;
     while (off < len) {
         int n;
-        pthread_mutex_lock(&g_ctx.io_lock);
-        n = BIO_write(g_ctx.bio, data + off, (int)(len - off));
-        pthread_mutex_unlock(&g_ctx.io_lock);
-        if (n > 0) {
-            off += (size_t)n;
-            retry = 0;
+        int rc;
+        osal_mutex_lock(g_ctx.io_lock);
+        if (g_ctx.tls)
+            rc = osal_tls_write(g_ctx.tls, data + off, len - off);
+        else
+            rc = osal_net_send(g_ctx.sock, data + off, len - off);
+        osal_mutex_unlock(g_ctx.io_lock);
+        if (rc == 0) {           /* 全量写完成 */
+            off = len;
+            break;
+        }
+        (void)n;
+        if (retry++ < 300) {
+            osal_sleep_ms(10);
             continue;
         }
-        int err = 0;
-        int retryable = 0;
-        if (g_ctx.ssl) {
-            err = SSL_get_error(g_ctx.ssl, n);
-            retryable = (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE);
-        } else {
-            retryable = BIO_should_retry(g_ctx.bio);
-        }
-        if (retryable && retry++ < 300) {
-            usleep(10 * 1000);
-            continue;
-        }
-        printf("[ws] write fail err=%d\n", err);
+        XZ_LOGE(TAG, "write fail");
         return -1;
     }
-    return 0;
+    return (off == len) ? 0 : -1;
 }
 
 /* 返回 >0 数据；0 无数据（本次没读到）；<0 对端关闭/错误 */
-static int bio_read(uint8_t *buf, int len)
+static int io_read(uint8_t *buf, int len)
 {
     /* 先 poll socket（不持锁），500ms 内无可读即让步 */
-    struct pollfd pfd = { .fd = g_ctx.sock, .events = POLLIN };
-    int pr = poll(&pfd, 1, 500);
+    int pr = osal_net_poll(g_ctx.sock, 1, 0, 500);
     if (pr <= 0)
-        return 0;    /* 超时/被信号打断：让步（保活/检查 closing） */
+        return 0;    /* 超时：让步（保活/检查 closing） */
 
-    pthread_mutex_lock(&g_ctx.io_lock);
-    int n = BIO_read(g_ctx.bio, buf, len);
-    pthread_mutex_unlock(&g_ctx.io_lock);
+    osal_mutex_lock(g_ctx.io_lock);
+    int n = g_ctx.tls ? osal_tls_read(g_ctx.tls, buf, (size_t)len)
+                      : osal_net_recv(g_ctx.sock, buf, (size_t)len);
+    osal_mutex_unlock(g_ctx.io_lock);
     if (n > 0)
         return n;
     if (n == 0)
         return -1;   /* 对端干净关闭 */
-    int ssl_err = 0;
-    if (g_ctx.ssl) {
-        ssl_err = SSL_get_error(g_ctx.ssl, n);
-        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE)
-            return 0;   /* TLS 记录未收全等，下次再试 */
-        printf("[ws] read ssl_err=%d errno=%d(%s) queue=%lu\n",
-               ssl_err, errno, strerror(errno),
-               (unsigned long)ERR_get_error());
-        return -1;
-    }
-    if (BIO_should_retry(g_ctx.bio))
-        return 0;      /* 明文 socket 超时 */
+    if (n == OSAL_TLS_AGAIN)
+        return 0;    /* TLS 记录未收全等，下次再试 */
+    XZ_LOGE(TAG, "read fail errno=%d", errno);
     return -1;
 }
 
@@ -174,7 +153,7 @@ static int send_frame(int opcode, const uint8_t *payload, size_t len)
     memcpy(pkt, hdr, (size_t)hlen);
     memcpy(pkt + hlen, masked, len);
 
-    int rc = bio_write_all(pkt, total) == 0 ? 0 : -1;
+    int rc = io_write_all(pkt, total) == 0 ? 0 : -1;
     free(pkt);
     free(masked);
     return rc;
@@ -224,7 +203,7 @@ static int parse_one_frame(uint8_t *opcode_out, size_t *payload_off,
         idx += 8;
     }
     if (len > WS_RCV_BUF_MAX - 16) {
-        printf("[ws] frame too large %zu\n", len);
+        XZ_LOGE(TAG, "frame too large %zu", len);
         return -2;
     }
     if (masked) {   /* 服务器→客户端帧不应带掩码，容错跳过 */
@@ -273,22 +252,22 @@ static int http_upgrade(const char *host, const char *port, const char *path,
         "%s"
         "\r\n",
         path, host, port, headers ? headers : "");
-    if (bio_write_all((const uint8_t *)req, (size_t)n) != 0)
+    if (io_write_all((const uint8_t *)req, (size_t)n) != 0)
         return -1;
 
     char resp[2048];
     size_t got = 0;
     int timeouts = 0;
     while (got < sizeof(resp) - 1) {
-        int n2 = bio_read((uint8_t *)resp + got, (int)(sizeof(resp) - 1 - got));
+        int n2 = io_read((uint8_t *)resp + got, (int)(sizeof(resp) - 1 - got));
         if (n2 < 0) {
-            printf("[ws] handshake read fail (got=%zu)\n%.200s\n", got, resp);
+            XZ_LOGE(TAG, "handshake read fail (got=%zu)\n%.200s", got, resp);
             return -1;
         }
         if (n2 == 0) {
             if (g_ctx.closing) return -1;
             if (++timeouts > 100) {   /* 100×1s 超时窗口 */
-                printf("[ws] handshake response timeout\n");
+                XZ_LOGE(TAG, "handshake response timeout");
                 return -1;
             }
             continue;
@@ -299,7 +278,7 @@ static int http_upgrade(const char *host, const char *port, const char *path,
         if (body) {
             if (strncmp(resp, "HTTP/1.1 101", 12) != 0 &&
                 strncmp(resp, "HTTP/1.0 101", 12) != 0) {
-                printf("[ws] upgrade rejected:\n%.400s\n", resp);
+                XZ_LOGE(TAG, "upgrade rejected:\n%.400s", resp);
                 return -1;
             }
             body += 4;
@@ -312,7 +291,7 @@ static int http_upgrade(const char *host, const char *port, const char *path,
             return 0;
         }
     }
-    printf("[ws] handshake response too long\n");
+    XZ_LOGE(TAG, "handshake response too long");
     return -1;
 }
 
@@ -328,7 +307,7 @@ int ws_client_connect(const char *url, const char *headers,
     const char *p = url;
     if (strncmp(url, "wss://", 6) == 0) { use_tls = 1; p = url + 6; }
     else if (strncmp(url, "ws://", 5) == 0) { p = url + 5; }
-    else { printf("[ws] bad url %s\n", url); return -1; }
+    else { XZ_LOGE(TAG, "bad url %s", url); return -1; }
 
     static char host[128], port[8], path[192];
     const char *slash = strchr(p, '/');
@@ -349,121 +328,59 @@ int ws_client_connect(const char *url, const char *headers,
     g_ctx.rx_buf = (uint8_t *)malloc(WS_RCV_BUF_MAX);
     if (!g_ctx.rx_buf)
         return -1;
-    pthread_mutex_init(&g_ctx.io_lock, NULL);
+    g_ctx.io_lock = osal_mutex_new();
+    if (!g_ctx.io_lock) {
+        free(g_ctx.rx_buf);
+        g_ctx.rx_buf = NULL;
+        return -1;
+    }
+    g_ctx.sock = OSAL_SOCK_INVALID;
     g_ctx.on_msg = on_msg;
     g_ctx.on_evt = on_evt;
     g_ctx.user   = user;
     g_ctx.closing = 0;
 
-    SSL_library_init();
-    SSL_load_error_strings();
-
-    /* TCP：原生 socket + poll 带超时连接（比 BIO nbio 轮询可靠） */
-    struct addrinfo hints = {0}, *res = NULL;
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    if (getaddrinfo(host, port, &hints, &res) != 0 || !res) {
-        printf("[ws] resolve %s fail\n", host);
+    /* TCP：osal 非阻塞 connect + poll 带超时（10s，原行为） */
+    if (osal_net_tcp_connect(host, port, 10000, &g_ctx.sock) != OSAL_OK) {
+        XZ_LOGE(TAG, "connect %s:%s fail", host, port);
         goto fail;
     }
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); goto fail; }
-    /* 非阻塞 connect + poll */
-    int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    int cr = connect(fd, res->ai_addr, res->ai_addrlen);
-    if (cr != 0 && errno != EINPROGRESS) {
-        printf("[ws] connect %s:%s fail\n", host, port);
-        close(fd); freeaddrinfo(res);
-        goto fail;
-    }
-    if (cr != 0) {
-        struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-        int pr = poll(&pfd, 1, 10000);
-        int soerr = 0; socklen_t slen = sizeof(soerr);
-        if (pr <= 0 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &slen) != 0 || soerr != 0) {
-            printf("[ws] connect %s:%s fail (poll=%d soerr=%d)\n", host, port, pr, soerr);
-            close(fd); freeaddrinfo(res);
-            goto fail;
-        }
-    }
-    freeaddrinfo(res);
-    /* 转回阻塞 + 保留 fd 给 bio_read 的 poll 用。
-     * 不再依赖 SO_RCVTIMEO：读路径 poll 判可读后才短读。 */
-    fcntl(fd, F_SETFL, flags);
-    struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    g_ctx.sock = fd;
-
-    /* BIO 包装 socket */
-    BIO *conn = BIO_new_socket(fd, BIO_CLOSE);
-    if (!conn) { close(fd); goto fail; }
 
     if (use_tls) {
-        g_ctx.ssl_ctx = SSL_CTX_new(TLS_client_method());
-        if (!g_ctx.ssl_ctx) { printf("[ws] SSL_CTX_new fail\n"); BIO_free_all(conn); goto fail; }
-        /* 板上无 CA bundle，服务器证书不校验（xiaozhi-esp32 默认同样不校验） */
-        SSL_CTX_set_verify(g_ctx.ssl_ctx, SSL_VERIFY_NONE, NULL);
-        g_ctx.ssl = SSL_new(g_ctx.ssl_ctx);
-        if (!g_ctx.ssl) { BIO_free_all(conn); goto fail; }
-        SSL_set_tlsext_host_name(g_ctx.ssl, host);   /* SNI */
-        SSL_set_bio(g_ctx.ssl, conn, conn);
-        /* SSL_connect 可能因 socket 超时返回 -1/WANT_READ，循环重试 */
-        {
-            int waited = 0;
-            while (1) {
-                int r = SSL_connect(g_ctx.ssl);
-                if (r == 1) break;
-                int err = SSL_get_error(g_ctx.ssl, r);
-                if ((err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) &&
-                    ++waited < 150) {   /* 最多 ~150×0.1s = 15s */
-                    usleep(100 * 1000);
-                    continue;
-                }
-                printf("[ws] TLS handshake fail err=%d(%lu)\n", err,
-                       (unsigned long)ERR_get_error());
-                goto fail_after_bio;
-            }
-        }
-        /* 关键：IO 必须走 SSL BIO（BIO_read/write → SSL_read/write 加解密）。
-         * 若拿 SSL_get_wbio（socket BIO）会绕过加密层发明文，服务器直接断连 */
-        g_ctx.bio = BIO_new(BIO_f_ssl());
-        if (!g_ctx.bio) goto fail_after_bio;
-        BIO_set_ssl(g_ctx.bio, g_ctx.ssl, BIO_CLOSE);
-        printf("[ws] TLS OK: %s %s\n",
-               SSL_get_cipher_version(g_ctx.ssl), SSL_get_cipher(g_ctx.ssl));
-    } else {
-        g_ctx.bio = conn;
+        /* osal_tls：SNI + 不校验证书（板上无 CA bundle）+ 握手重试（15s 上限） */
+        if (osal_tls_connect(&g_ctx.tls, g_ctx.sock, host, 15000) != OSAL_OK)
+            goto fail;
+        XZ_LOGI(TAG, "TLS OK");
     }
 
     if (http_upgrade(host, port, path, headers) != 0)
-        goto fail_after_bio;
+        goto fail;
 
     g_ctx.connected = 1;
     if (g_ctx.on_evt)
         g_ctx.on_evt(g_ctx.user, WS_EV_CONNECTED);
-    printf("[ws] connected %s:%s%s\n", host, port, path);
+    XZ_LOGI(TAG, "connected %s:%s%s", host, port, path);
 
     /* ---- 收包循环 ---- */
-    time_t last_ping = time(NULL);
+    uint64_t last_ping = osal_uptime_ms64();
     while (!g_ctx.closing) {
         uint8_t opcode;
         size_t poff = 0, plen = 0;
         int close_code = 0;
         int rc = parse_one_frame(&opcode, &poff, &plen, &close_code);
         if (rc == -1) {
-            /* 数据不足：压缩缓冲后从 BIO 再读 */
+            /* 数据不足：压缩缓冲后从 IO 再读 */
             rx_compact();
-            int n = bio_read(g_ctx.rx_buf + g_ctx.rx_len,
-                             (int)(WS_RCV_BUF_MAX - g_ctx.rx_len));
+            int n = io_read(g_ctx.rx_buf + g_ctx.rx_len,
+                            (int)(WS_RCV_BUF_MAX - g_ctx.rx_len));
             if (n < 0) {
-                printf("[ws] peer closed\n");
+                XZ_LOGI(TAG, "peer closed");
                 break;
             }
             if (n == 0) {
                 /* poll 空闲返回：保活 ping（服务器 idle ~60-90s 会踢） */
-                time_t now = time(NULL);
-                if (now - last_ping >= 20) {
+                uint64_t now = osal_uptime_ms64();
+                if (now - last_ping >= 20000) {
                     if (send_frame(0x9, (const uint8_t *)"keepalive", 9) == 0)
                         last_ping = now;
                 }
@@ -486,7 +403,7 @@ int ws_client_connect(const char *url, const char *headers,
             }
             break;
         case 0x8:   /* close：回 close 后退出 */
-            printf("[ws] close frame code=%d\n", close_code);
+            XZ_LOGI(TAG, "close frame code=%d", close_code);
             (void)send_frame(0x8, (const uint8_t *)"", 0);
             g_ctx.closing = 1;
             break;
@@ -504,24 +421,20 @@ int ws_client_connect(const char *url, const char *headers,
     if (g_ctx.on_evt)
         g_ctx.on_evt(g_ctx.user, WS_EV_DISCONNECTED);
     goto cleanup;
-fail_after_bio:
 fail:
 cleanup:
-    /* SSL BIO（BIO_CLOSE）会连带 free SSL；socket BIO 自行 free。
-     * 顺序：先 free BIO 链（内部释放 SSL），再兜底 free SSL/ctx */
-    if (g_ctx.bio) {
-        BIO_free_all(g_ctx.bio);          /* SSL BIO 带 CLOSE 会一起释放 ssl */
-        g_ctx.bio = NULL;
-        g_ctx.ssl = NULL;                 /* 已被上面连带释放 */
-    } else if (g_ctx.ssl) {
-        SSL_free(g_ctx.ssl);
-        g_ctx.ssl = NULL;
+    if (g_ctx.tls) {
+        osal_tls_close(g_ctx.tls);
+        g_ctx.tls = NULL;
     }
-    if (g_ctx.ssl_ctx) SSL_CTX_free(g_ctx.ssl_ctx);
-    g_ctx.bio = NULL;
-    g_ctx.ssl = NULL;
-    g_ctx.ssl_ctx = NULL;
-    pthread_mutex_destroy(&g_ctx.io_lock);
+    if (g_ctx.sock != OSAL_SOCK_INVALID) {
+        osal_net_close(g_ctx.sock);
+        g_ctx.sock = OSAL_SOCK_INVALID;
+    }
+    if (g_ctx.io_lock) {
+        osal_mutex_free(g_ctx.io_lock);
+        g_ctx.io_lock = NULL;
+    }
     free(g_ctx.rx_buf);
     g_ctx.rx_buf = NULL;
     return g_ctx.connected ? 0 : -1;

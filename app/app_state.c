@@ -3,19 +3,19 @@
  */
 #include "app_state.h"
 #include "ui_main.h"
-#include <stdatomic.h>
+#include "osal/osal_atomic.h"
 #include <string.h>
 
-static atomic_int g_state = XZ_STATE_IDLE;
+static osal_atomic_t g_state = OSAL_ATOMIC_INIT_ZERO;
 
 xz_state_t app_state_get(void)
 {
-    return (xz_state_t)atomic_load(&g_state);
+    return (xz_state_t)osal_atomic_get(&g_state);
 }
 
 void app_state_init(void)
 {
-    atomic_store(&g_state, XZ_STATE_IDLE);
+    osal_atomic_set(&g_state, XZ_STATE_IDLE);
 }
 
 void app_state_deinit(void)
@@ -24,6 +24,6 @@ void app_state_deinit(void)
 
 void app_state_set(xz_state_t s, const char *reason)
 {
-    atomic_store(&g_state, s);
+    osal_atomic_set(&g_state, s);
     ui_main_on_state(s, reason);
 }

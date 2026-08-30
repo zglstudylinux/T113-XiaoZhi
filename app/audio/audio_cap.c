@@ -18,9 +18,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
-#include <unistd.h>
-#include <stdatomic.h>
+#include "osal/osal_thread.h"
+#include "osal/osal_atomic.h"
+#include "osal/osal_log.h"
 
 #define CAP_RATE      16000
 #define CAP_CH        1
@@ -29,12 +29,12 @@
 #define PERIOD_SAMP   (FRAME_SAMP / 3)                  /* 320 = 20ms */
 
 static snd_pcm_t   *g_pcm;
-static pthread_t    g_thr;
-static atomic_int   g_run = 0;
+static osal_thread_t g_thr;
+static osal_atomic_t g_run = OSAL_ATOMIC_INIT_ZERO;
 static audio_cap_cb_t g_cb;
 static void        *g_cb_user;
 
-int audio_cap_running(void) { return atomic_load(&g_run); }
+int audio_cap_running(void) { return osal_atomic_get(&g_run); }
 
 /* ---- mixer：恢复采集必需的控件（进程内 ALSA API，无需 amixer） ---- */
 static void cap_set_ctl_enum(snd_ctl_t *ctl, const char *name, unsigned item)
@@ -85,7 +85,7 @@ static void *cap_thread(void *arg)
     static int16_t frame[FRAME_SAMP];
     int have = 0;
 
-    while (atomic_load(&g_run)) {
+    while (osal_atomic_get(&g_run)) {
         int n = snd_pcm_readi(g_pcm, frame + have, PERIOD_SAMP);
         if (n == -EPIPE) {                    /* overrun */
             snd_pcm_prepare(g_pcm);
@@ -110,7 +110,7 @@ static void *cap_thread(void *arg)
 
 int audio_cap_start(audio_cap_cb_t cb, void *user)
 {
-    if (atomic_load(&g_run))
+    if (osal_atomic_get(&g_run))
         return 0;    /* 已在跑 */
 
     cap_mixer_setup();
@@ -158,9 +158,9 @@ int audio_cap_start(audio_cap_cb_t cb, void *user)
 
     g_cb = cb;
     g_cb_user = user;
-    atomic_store(&g_run, 1);
-    if (pthread_create(&g_thr, NULL, cap_thread, NULL) != 0) {
-        atomic_store(&g_run, 0);
+    osal_atomic_set(&g_run, 1);
+    if (osal_thread_create(&g_thr, cap_thread, NULL) != OSAL_OK) {
+        osal_atomic_set(&g_run, 0);
         snd_pcm_close(g_pcm);
         g_pcm = NULL;
         return -1;
@@ -171,10 +171,10 @@ int audio_cap_start(audio_cap_cb_t cb, void *user)
 
 void audio_cap_stop(void)
 {
-    if (!atomic_load(&g_run))
+    if (!osal_atomic_get(&g_run))
         return;
-    atomic_store(&g_run, 0);
-    pthread_join(g_thr, NULL);
+    osal_atomic_set(&g_run, 0);
+    osal_thread_join(g_thr);
     if (g_pcm) {
         snd_pcm_drop(g_pcm);
         snd_pcm_close(g_pcm);

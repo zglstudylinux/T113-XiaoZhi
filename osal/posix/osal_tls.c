@@ -95,7 +95,7 @@ int osal_tls_read(osal_tls_t *t, void *buf, size_t len)
     if (err == SSL_ERROR_ZERO_RETURN)
         return 0;    /* 对端干净关闭 */
     if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
-        return OSAL_ERR;   /* 阻塞 fd 上不应出现；按错误处理 */
+        return OSAL_TLS_AGAIN;   /* TLS 记录未收全：下次再试（原 bio_read 同语义） */
     return OSAL_ERR;
 }
 

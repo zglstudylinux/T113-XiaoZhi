@@ -2,6 +2,7 @@
  * osal_thread.c — POSIX 实现：pthread 封装
  */
 #include "osal/osal_thread.h"
+#include <stdlib.h>
 #include <pthread.h>
 
 int osal_thread_create(osal_thread_t *out, osal_thread_fn_t fn, void *arg)

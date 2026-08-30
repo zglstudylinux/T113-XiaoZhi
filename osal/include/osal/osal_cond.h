@@ -13,6 +13,8 @@ extern "C" {
 
 typedef struct osal_cond *osal_cond_t;
 
+#define OSAL_COND_WAIT_FOREVER 0xFFFFFFFFu
+
 osal_cond_t osal_cond_new(void);
 /* 返回 1=被唤醒，0=超时 */
 int  osal_cond_wait(osal_cond_t c, osal_mutex_t m, uint32_t timeout_ms);

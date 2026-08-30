@@ -18,6 +18,11 @@ int osal_fwrite(const void *buf, size_t n, osal_file_t *f)
     return (int)fwrite(buf, 1, n, f);
 }
 
+char *osal_getline(char *buf, int size, osal_file_t *f)
+{
+    return fgets(buf, size, f);
+}
+
 void osal_fclose(osal_file_t *f)
 {
     if (f)

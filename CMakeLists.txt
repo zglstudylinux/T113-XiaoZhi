@@ -37,6 +37,7 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/app/audio
     ${CMAKE_SOURCE_DIR}/app/wifi
     ${CMAKE_SOURCE_DIR}/ui
+    ${CMAKE_SOURCE_DIR}/port
     ${CMAKE_SOURCE_DIR}/third_party            # "lvgl/lvgl.h"、"lv_drv_conf.h"
     ${CMAKE_SOURCE_DIR}/third_party/lvgl/src/extra/libs/freetype
     ${CMAKE_SOURCE_DIR}/third_party/freetype/include
@@ -80,6 +81,14 @@ file(GLOB APP_SRC
     ${CMAKE_SOURCE_DIR}/app/audio/*.c
     ${CMAKE_SOURCE_DIR}/app/wifi/*.c
     ${CMAKE_SOURCE_DIR}/ui/*.c)
+if(XZ_PLATFORM STREQUAL "t113")
+    list(APPEND APP_SRC ${CMAKE_SOURCE_DIR}/port/linux/port_display.c
+                        ${CMAKE_SOURCE_DIR}/port/linux/port_tick.c)
+endif()
+if(XZ_PLATFORM STREQUAL "host")
+    list(APPEND APP_SRC ${CMAKE_SOURCE_DIR}/port/sdl/port_display.c
+                        ${CMAKE_SOURCE_DIR}/port/sdl/port_tick.c)
+endif()
 
 add_executable(xiaozhi ${APP_SRC})
 target_link_libraries(xiaozhi PRIVATE lvgl lv_drivers cjson xz_osal

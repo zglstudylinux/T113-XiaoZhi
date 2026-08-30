@@ -61,6 +61,10 @@ int osal_net_tcp_connect(const char *host, const char *port,
     freeaddrinfo(res);
 
     fcntl(fd, F_SETFL, flags);   /* 转回阻塞 */
+    /* 5s 收发超时（原 ws/OTA 连接后统一行为；ws 读路径另有 poll 前置） */
+    struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     *out = fd;
     return OSAL_OK;
 }

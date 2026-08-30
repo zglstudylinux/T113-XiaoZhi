@@ -19,10 +19,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
-#include <unistd.h>
-#include <stdatomic.h>
-#include <time.h>
+#include "osal/osal_thread.h"
+#include "osal/osal_mutex.h"
+#include "osal/osal_cond.h"
+#include "osal/osal_atomic.h"
+#include "osal/osal_time.h"
+#include "osal/osal_log.h"
 
 #define PLAY_DEVICE     "default"
 #define PLAY_RATE       48000
@@ -40,13 +42,15 @@ typedef struct {
 /* ---- 待解码队列（网络线程生产 / 播放线程消费） ---- */
 static opus_qitem_t  g_queue[Q_MAX_FRAMES];
 static int           g_q_head, g_q_tail, g_q_count;
-static pthread_mutex_t g_qmtx = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  g_qcond = PTHREAD_COND_INITIALIZER;
+/* g_qmtx/g_qcond 在 audio_play_start 里显式初始化（osal 动态分配，
+ * 无法静态初始化；行为等价，start 前 q_push 不可达） */
+static osal_mutex_t g_qmtx;
+static osal_cond_t  g_qcond;
 
 /* ---- 播放线程 ---- */
 static snd_pcm_t    *g_pcm;
-static pthread_t     g_thr;
-static atomic_int    g_run = 0;
+static osal_thread_t g_thr;
+static osal_atomic_t g_run = OSAL_ATOMIC_INIT_ZERO;
 static int           g_src_rate = 24000;
 static int           g_underruns;
 
@@ -71,7 +75,7 @@ static void play_set_ctl_enum(const char *name, unsigned item)
 
 static void q_push(const uint8_t *opus, int len)
 {
-    pthread_mutex_lock(&g_qmtx);
+    osal_mutex_lock(g_qmtx);
     if (g_q_count >= Q_MAX_FRAMES) {
         /* 队满丢最老（实时语音宁丢勿积压） */
         g_q_head = (g_q_head + 1) % Q_MAX_FRAMES;
@@ -84,8 +88,8 @@ static void q_push(const uint8_t *opus, int len)
     memcpy(it->data, opus, (size_t)len);
     g_q_tail = (g_q_tail + 1) % Q_MAX_FRAMES;
     g_q_count++;
-    pthread_cond_signal(&g_qcond);
-    pthread_mutex_unlock(&g_qmtx);
+    osal_cond_signal(g_qcond);
+    osal_mutex_unlock(g_qmtx);
 }
 
 static opus_qitem_t *q_pop(void)
@@ -111,13 +115,13 @@ static void *play_thread(void *arg)
     if (df) printf("[play][diag] dump → /mnt/UDISK/xiaozhi/diag_play.pcm\n");
 #endif
 
-    while (atomic_load(&g_run)) {
+    while (osal_atomic_get(&g_run)) {
         opus_qitem_t *it = NULL;
-        pthread_mutex_lock(&g_qmtx);
-        while (g_q_count == 0 && atomic_load(&g_run))
-            pthread_cond_wait(&g_qcond, &g_qmtx);
+        osal_mutex_lock(g_qmtx);
+        while (g_q_count == 0 && osal_atomic_get(&g_run))
+            osal_cond_wait(g_qcond, g_qmtx, OSAL_COND_WAIT_FOREVER);
         it = q_pop();
-        pthread_mutex_unlock(&g_qmtx);
+        osal_mutex_unlock(g_qmtx);
         if (!it)
             continue;
 
@@ -141,7 +145,7 @@ static void *play_thread(void *arg)
         /* 写 ALSA（欠载自动恢复） */
         const int16_t *p = pcm_st;
         int left = m;                      /* 帧数（交织后每帧 2 样本） */
-        while (left > 0 && atomic_load(&g_run)) {
+        while (left > 0 && osal_atomic_get(&g_run)) {
             long w = snd_pcm_writei(g_pcm, p, (snd_pcm_uframes_t)left);
             if (w == -EPIPE) {
                 /* underrun：数据没跟上播放 → 周期性爆音（滋息声） */
@@ -170,13 +174,14 @@ static void *play_thread(void *arg)
 
 int audio_play_start(int src_rate)
 {
-    if (atomic_load(&g_run)) {
+    if (osal_atomic_get(&g_run)) {
         /* 已在跑：采样率变化才重配（tts 会话间通常同率） */
         if (g_src_rate == src_rate)
             return 0;
         audio_play_stop();
     }
 
+    if (!g_qmtx) { g_qmtx = osal_mutex_new(); g_qcond = osal_cond_new(); }
     if (opus_dec_init(src_rate) != 0)
         return -1;
     if (resample_init(src_rate, PLAY_RATE) != 0) {
@@ -224,13 +229,13 @@ int audio_play_start(int src_rate)
     g_src_rate = src_rate;
     g_underruns = 0;
     play_set_ctl_enum("DAC HPF Mode", 1);   /* On：滤 DC/低频嗡声 */
-    pthread_mutex_lock(&g_qmtx);
+    osal_mutex_lock(g_qmtx);
     g_q_head = g_q_tail = g_q_count = 0;
-    pthread_mutex_unlock(&g_qmtx);
+    osal_mutex_unlock(g_qmtx);
 
-    atomic_store(&g_run, 1);
-    if (pthread_create(&g_thr, NULL, play_thread, NULL) != 0) {
-        atomic_store(&g_run, 0);
+    osal_atomic_set(&g_run, 1);
+    if (osal_thread_create(&g_thr, play_thread, NULL) != OSAL_OK) {
+        osal_atomic_set(&g_run, 0);
         snd_pcm_close(g_pcm); g_pcm = NULL;
         opus_dec_deinit(); resample_deinit();
         return -1;
@@ -242,7 +247,7 @@ int audio_play_start(int src_rate)
 
 int audio_play_feed(const uint8_t *opus, int len)
 {
-    if (!atomic_load(&g_run))
+    if (!osal_atomic_get(&g_run))
         return -1;
     if (len <= 0 || len > Q_FRAME_BYTES)
         return -1;
@@ -252,40 +257,40 @@ int audio_play_feed(const uint8_t *opus, int len)
 
 void audio_play_drain(void)
 {
-    if (!atomic_load(&g_run))
+    if (!osal_atomic_get(&g_run))
         return;
     /* 等解码队列清空。注意：不直接调 snd_pcm_drain——ALSA handle
      * 不允许与播放线程的 writei 并发（同 M3 SSL 并发坑），
      * 队列清空后硬件缓冲最多剩 ~240ms，等它自然播完即可 */
     for (int i = 0; i < 100; i++) {          /* 最多 5s */
-        pthread_mutex_lock(&g_qmtx);
+        osal_mutex_lock(g_qmtx);
         int cnt = g_q_count;
-        pthread_mutex_unlock(&g_qmtx);
+        osal_mutex_unlock(g_qmtx);
         if (cnt == 0)
             break;
-        usleep(50 * 1000);
+        osal_sleep_ms(50);
     }
-    usleep(300 * 1000);   /* 最后一帧写入 + 硬件缓冲播完的尾巴 */
+    osal_sleep_ms(300);   /* 最后一帧写入 + 硬件缓冲播完的尾巴 */
 }
 
 void audio_play_flush(void)
 {
     /* 只清解码队列，不碰 PCM（播放线程会欠载自动 prepare 静音）：
      * snd_pcm_drop 若与播放线程 writei 并发会破坏 ALSA 状态 */
-    pthread_mutex_lock(&g_qmtx);
+    osal_mutex_lock(g_qmtx);
     g_q_head = g_q_tail = g_q_count = 0;
-    pthread_mutex_unlock(&g_qmtx);
+    osal_mutex_unlock(g_qmtx);
 }
 
 void audio_play_stop(void)
 {
-    if (!atomic_load(&g_run))
+    if (!osal_atomic_get(&g_run))
         return;
-    atomic_store(&g_run, 0);
-    pthread_mutex_lock(&g_qmtx);
-    pthread_cond_broadcast(&g_qcond);
-    pthread_mutex_unlock(&g_qmtx);
-    pthread_join(g_thr, NULL);
+    osal_atomic_set(&g_run, 0);
+    osal_mutex_lock(g_qmtx);
+    osal_cond_broadcast(g_qcond);
+    osal_mutex_unlock(g_qmtx);
+    osal_thread_join(g_thr);
     if (g_pcm) {
         snd_pcm_drop(g_pcm);
         snd_pcm_close(g_pcm);

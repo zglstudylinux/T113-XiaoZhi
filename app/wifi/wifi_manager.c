@@ -14,11 +14,12 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
-#include <pthread.h>
+#include "osal/osal_thread.h"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
-#include <stdatomic.h>
+#include "osal/osal_atomic.h"
+#include "osal/osal_time.h"
 
 #define WPA_IFACE        "wlan0"
 #define WPA_CONF         "/etc/wifi/wpa_supplicant/wpa_supplicant.conf"
@@ -90,15 +91,15 @@ static int ctrl_ok(int fd, const char *cmd)
 
 static int g_cmd_fd = -1;              /* 命令通道 */
 static int g_evt_fd = -1;              /* 事件通道（attach） */
-static pthread_t g_evt_thread;
-static atomic_int g_run = 0;
-static atomic_int g_state = WIFI_STATE_INACTIVE;
+static osal_thread_t g_evt_thread;
+static osal_atomic_t g_run = OSAL_ATOMIC_INIT_ZERO;
+static osal_atomic_t g_state = OSAL_ATOMIC_INIT(WIFI_STATE_INACTIVE);
 static char g_cur_ssid[WIFI_MAX_SSID_LEN + 1];
 static char g_cur_ip[16];
 
-static void set_state(wifi_state_t s) { atomic_store(&g_state, s); }
+static void set_state(wifi_state_t s) { osal_atomic_set(&g_state, s); }
 
-wifi_state_t wifi_manager_state(void) { return (wifi_state_t)atomic_load(&g_state); }
+wifi_state_t wifi_manager_state(void) { return (wifi_state_t)osal_atomic_get(&g_state); }
 const char *wifi_manager_get_ip(void)  { return g_cur_ip[0] ? g_cur_ip : NULL; }
 const char *wifi_manager_get_ssid(void){ return g_cur_ssid[0] ? g_cur_ssid : NULL; }
 
@@ -126,7 +127,7 @@ static int bring_up(void)
         int retry;
         for (retry = 0; retry < 10 && !iface_exists(); retry++) {
             system(cmd);
-            usleep(500 * 1000);
+            osal_sleep_ms(500);
         }
         if (!iface_exists()) {
             printf("[wifi] 8723ds 驱动加载失败\n");
@@ -142,7 +143,7 @@ static int bring_up(void)
         int retry;
         for (retry = 0; retry < 10 && !wpa_running(); retry++) {
             system(cmd);
-            usleep(500 * 1000);
+            osal_sleep_ms(500);
         }
         if (!wpa_running()) {
             printf("[wifi] wpa_supplicant 启动失败\n");
@@ -198,9 +199,9 @@ static void *event_thread(void *arg)
 {
     (void)arg;
     char buf[1024];
-    while (atomic_load(&g_run)) {
+    while (osal_atomic_get(&g_run)) {
         if (g_evt_fd < 0) {
-            usleep(500 * 1000);
+            osal_sleep_ms(500);
             continue;
         }
         /* 阻塞收事件（5s 超时兜底，回来检查 g_run） */
@@ -251,8 +252,8 @@ int wifi_manager_open(void)
     if (g_evt_fd >= 0)
         ctrl_ok(g_evt_fd, "ATTACH");
 
-    atomic_store(&g_run, 1);
-    pthread_create(&g_evt_thread, NULL, event_thread, NULL);
+    osal_atomic_set(&g_run, 1);
+    osal_thread_create(&g_evt_thread, event_thread, NULL);
 
     poll_status();
     printf("[wifi] open 完成 state=%d\n", wifi_manager_state());
@@ -261,9 +262,9 @@ int wifi_manager_open(void)
 
 void wifi_manager_close(void)
 {
-    atomic_store(&g_run, 0);
+    osal_atomic_set(&g_run, 0);
     if (g_evt_thread)
-        pthread_join(g_evt_thread, NULL);   /* 事件 recv 5s 超时后自然退出 */
+        osal_thread_join(g_evt_thread);   /* 事件 recv 5s 超时后自然退出 */
     if (g_evt_fd >= 0) close(g_evt_fd);
     if (g_cmd_fd >= 0) close(g_cmd_fd);
     g_evt_fd = g_cmd_fd = -1;
@@ -284,7 +285,7 @@ int wifi_manager_scan(wifi_ap_t *aps, int max_ap)
             return -1;
         }
     }
-    usleep(3500 * 1000);   /* 等扫描完成（dmesg 观察 2.5~3.5s） */
+    osal_sleep_ms(3500);   /* 等扫描完成（dmesg 观察 2.5~3.5s） */
 
     char reply[REPLY_MAX];
     if (ctrl_cmd(g_cmd_fd, "SCAN_RESULTS", reply, sizeof(reply)) != 0) {
@@ -375,7 +376,7 @@ int wifi_manager_connect(const char *ssid, const char *psk, int timeout_ms)
     /* 轮询等关联结果：主动 STATUS 为准（事件线程可能错过 CONNECTED） */
     int waited = 0;
     while (waited < timeout_ms) {
-        usleep(300 * 1000);
+        osal_sleep_ms(300);
         waited += 300;
         poll_status();
         wifi_state_t st = wifi_manager_state();

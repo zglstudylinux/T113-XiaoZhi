@@ -20,7 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
+#include "osal/osal_thread.h"
 #include <unistd.h>
 
 static void (*g_on_done)(int connected);
@@ -117,9 +117,9 @@ static void start_scan(void)
     lv_obj_set_style_text_font(l, ui_font_cn_32, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(0x8A98A6), 0);
     lv_label_set_text(l, "正在扫描附近的 WiFi…");
-    pthread_t tid;
-    pthread_create(&tid, NULL, scan_thread, NULL);
-    pthread_detach(tid);
+    osal_thread_t tid;
+    if (osal_thread_create(&tid, scan_thread, NULL) == OSAL_OK)
+        osal_thread_detach(tid);
 }
 
 /* ---------- 连接流程 ---------- */
@@ -177,9 +177,9 @@ static void conn_click_ev_cb(lv_event_t *e)
     lv_obj_add_flag(g_psw_win, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(g_kb, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(g_status, "连接中…");
-    pthread_t tid;
-    pthread_create(&tid, NULL, connect_thread, NULL);
-    pthread_detach(tid);
+    osal_thread_t tid;
+    if (osal_thread_create(&tid, connect_thread, NULL) == OSAL_OK)
+        osal_thread_detach(tid);
 }
 
 static void cancel_click_ev_cb(lv_event_t *e)
@@ -200,9 +200,9 @@ static void ap_click_ev_cb(lv_event_t *e)
     if (g_sel_open) {
         g_psk_pending[0] = '\0';
         lv_label_set_text(g_status, "连接中…");
-        pthread_t tid;
-        pthread_create(&tid, NULL, connect_thread, NULL);
-        pthread_detach(tid);
+        osal_thread_t tid;
+        if (osal_thread_create(&tid, connect_thread, NULL) == OSAL_OK)
+            osal_thread_detach(tid);
         return;
     }
 
