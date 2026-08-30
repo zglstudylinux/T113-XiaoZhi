@@ -10,6 +10,7 @@
 #include "ui_navigate.h"
 #include "ui_msg.h"
 #include "ui_menu.h"
+#include "ui_wifi_setup.h"
 #include "net/xz_protocol.h"
 #include "wifi/wifi_manager.h"
 #include <stdio.h>
@@ -110,7 +111,8 @@ void ui_main_create(lv_obj_t *scr)
     lv_obj_set_style_text_color(g_state_label, lv_color_hex(0x4FC3F7), 0);
     lv_label_set_text(g_state_label,
         no_wifi ? "未连接 WiFi" : state_text(XZ_STATE_IDLE));
-    lv_obj_align(g_state_label, LV_ALIGN_TOP_MID, 0, 372);
+    /* 状态行要压在聊天区上方（聊天区顶 432），太低会与对话框叠字 */
+    lv_obj_align(g_state_label, LV_ALIGN_TOP_MID, 0, 350);
 
     if (no_wifi) {
         /* 黄字指引占信息行位置（同一行不叠字） */
@@ -118,20 +120,20 @@ void ui_main_create(lv_obj_t *scr)
         lv_obj_set_style_text_font(g_wifi_label, ui_font_cn_24, 0);
         lv_obj_set_style_text_color(g_wifi_label, lv_color_hex(0xF7B500), 0);
         lv_label_set_text(g_wifi_label, "点下方按钮先配网");
-        lv_obj_align(g_wifi_label, LV_ALIGN_TOP_MID, 0, 414);
+        lv_obj_align(g_wifi_label, LV_ALIGN_TOP_MID, 0, 392);
     } else {
         /* 服务器信息行（session / 验证码） */
         g_net_label = lv_label_create(scr);
         lv_obj_set_style_text_font(g_net_label, ui_font_cn_24, 0);
         lv_obj_set_style_text_color(g_net_label, lv_color_hex(0x8FA3B8), 0);
         lv_label_set_text(g_net_label, "未连接服务器");
-        lv_obj_align(g_net_label, LV_ALIGN_TOP_MID, 0, 414);
+        lv_obj_align(g_net_label, LV_ALIGN_TOP_MID, 0, 392);
     }
 
     /* 聊天区（滚动容器 + 气泡纵向排列） */
     g_chat_cont = lv_obj_create(scr);
-    lv_obj_set_size(g_chat_cont, 440, 130);
-    lv_obj_align(g_chat_cont, LV_ALIGN_BOTTOM_MID, 0, -110);
+    lv_obj_set_size(g_chat_cont, 440, 106);
+    lv_obj_align(g_chat_cont, LV_ALIGN_BOTTOM_MID, 0, -104);
     lv_obj_set_style_bg_color(g_chat_cont, lv_color_hex(0x0A0E14), 0);
     lv_obj_set_style_bg_opa(g_chat_cont, LV_OPA_40, 0);
     lv_obj_set_style_border_width(g_chat_cont, 0, 0);
@@ -237,7 +239,7 @@ static void net_info_async(void *p)
         lv_label_set_text_fmt(g_net_label, "%s\n%s", m->l1, m->l2);
     else
         lv_label_set_text(g_net_label, m->l1);
-    lv_obj_align(g_net_label, LV_ALIGN_TOP_MID, 0, 414);
+    lv_obj_align(g_net_label, LV_ALIGN_TOP_MID, 0, 392);
     free(m);
 }
 
@@ -295,12 +297,19 @@ static void chat_add_async(void *p)
     lv_obj_set_style_max_width(bubble, 360, 0);
     lv_obj_align(bubble, m->from_user ? LV_ALIGN_RIGHT_MID : LV_ALIGN_LEFT_MID,
                  0, 0);
-    lv_obj_scroll_to_view(row, LV_ANIM_ON);
 
     /* 上限 8 条，超出删最旧（防 LVGL 内存涨） */
     uint32_t cnt = lv_obj_get_child_cnt(g_chat_box);
     if (cnt > 8)
         lv_obj_del(lv_obj_get_child(g_chat_box, 0));
+
+    /* 布局先强制重算再滚底：LVGL flex 布局下帧刷新才生效，加完立刻
+     * scroll_to_view 拿到的是旧几何 → 新气泡停在视区外（手动滑一下才见）。
+     * stt/tts 每条都走这里，强制重排后自动贴底实时可见 */
+    lv_obj_update_layout(g_chat_box);
+    lv_coord_t bottom = lv_obj_get_scroll_bottom(g_chat_cont);
+    if (bottom > 0)
+        lv_obj_scroll_to_y(g_chat_cont, bottom, LV_ANIM_OFF);
     free(m);
 }
 

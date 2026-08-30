@@ -18,6 +18,7 @@
 #include "ui/ui_menu.h"
 #include "wifi/wifi_manager.h"
 #include "net/xz_protocol.h"
+#include "ui/ui_face.h"
 #include <unistd.h>
 #include <time.h>
 #include <sys/time.h>
@@ -74,7 +75,8 @@ static void xz_evt_async(void *p)
         ui_main_show_activation(m->data);
         break;
     case XZ_EVT_HELLO_OK:
-        ui_main_on_server_info("服务器已连接", m->data);
+        /* 单行显示（带 session 两行会压到下方聊天区顶） */
+        ui_main_on_server_info("服务器已连接", "");
         app_state_set(XZ_STATE_IDLE, "hello ok");
         break;
     case XZ_EVT_GOODBYE:
