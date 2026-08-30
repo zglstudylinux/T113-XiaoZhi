@@ -67,6 +67,11 @@ target_compile_definitions(lv_drivers PRIVATE
 
 add_library(cjson STATIC ${CMAKE_SOURCE_DIR}/third_party/cjson/cJSON.c)
 
+# ---- OSAL（接口 + POSIX 参考实现；MCU 侧换 posix/ 目录即可）----
+file(GLOB OSAL_SRC ${CMAKE_SOURCE_DIR}/osal/posix/*.c)
+add_library(xz_osal STATIC ${OSAL_SRC})
+target_include_directories(xz_osal PUBLIC ${CMAKE_SOURCE_DIR}/osal/include)
+
 # ---- 应用源码（新分层布局）----
 file(GLOB APP_SRC
     ${CMAKE_SOURCE_DIR}/main/*.c
@@ -77,7 +82,7 @@ file(GLOB APP_SRC
     ${CMAKE_SOURCE_DIR}/ui/*.c)
 
 add_executable(xiaozhi ${APP_SRC})
-target_link_libraries(xiaozhi PRIVATE lvgl lv_drivers cjson
+target_link_libraries(xiaozhi PRIVATE lvgl lv_drivers cjson xz_osal
     ${XZ_OPUS_LIB}                 # 静态链入（_libs）
     ${XZ_FREETYPE_LIB}
     ${XZ_SSL_LIB} ${XZ_CRYPTO_LIB}
