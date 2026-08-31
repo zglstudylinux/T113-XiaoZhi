@@ -8,14 +8,13 @@
 #include "ui_navigate.h"
 #include "ui_main.h"
 #include "ui_wifi_setup.h"
+#include "ui_res.h"
 #include "wifi/wifi_manager.h"
 #include <stdio.h>
 #include <string.h>
 
-#define IMG_DIR "S:/mnt/UDISK/xiaozhi/images/"
-
 typedef struct {
-    const char *icon;               /* PNG 路径（NULL=用 symbol） */
+    const char *name;               /* images/ 下文件名（经 ui_res_img 解析） */
     const char *symbol;             /* 图标退化/兜底 */
     const char *title;
     const char *sub;
@@ -26,9 +25,9 @@ static void open_xiaozhi(void);
 static void open_wifi(void);
 
 static const menu_item_t g_pages[] = {
-    { IMG_DIR "menu_xiaozhi.png", LV_SYMBOL_AUDIO, "AI 小智",
+    { "menu_xiaozhi.png", LV_SYMBOL_AUDIO, "AI 小智",
       "语音助手", open_xiaozhi },
-    { IMG_DIR "menu_wifi.png", LV_SYMBOL_WIFI, "WiFi 设置",
+    { "menu_wifi.png", LV_SYMBOL_WIFI, "WiFi 设置",
       "扫描 / 连接网络", open_wifi },
 };
 
@@ -83,9 +82,9 @@ static void add_item(lv_obj_t *scr, const menu_item_t *it, int idx)
     /* 图标：PNG 素材（可解码才用），否则 symbol 字体兜底。
      * 注意 lv_img_get_src(src) 按 src 查询解码器，不是传对象 */
     lv_obj_t *icon = NULL;
-    if (it->icon && lv_img_get_src(it->icon) != NULL) {
+    if (it->name && lv_img_get_src(ui_res_img(it->name)) != NULL) {
         icon = lv_img_create(btn);
-        lv_img_set_src(icon, it->icon);
+        lv_img_set_src(icon, ui_res_img(it->name));
     }
     if (icon == NULL) {
         icon = lv_label_create(btn);

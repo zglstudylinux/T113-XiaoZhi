@@ -8,12 +8,11 @@
 #include "ui_face.h"
 #include "ui_main.h"
 #include "ui_navigate.h"
+#include "ui_res.h"
 #include <stdio.h>
 #include <string.h>
 
-#define IMG_DIR  "S:/mnt/UDISK/xiaozhi/images/"
-
-/* 帧序列（静态路径数组，切换时整体替换） */
+/* 帧序列（静态名字数组，切换时整体替换；路径经 ui_res_img 解析） */
 static const char *g_frames[8];
 static int          g_frame_cnt;
 static int          g_frame_idx;
@@ -70,9 +69,9 @@ static void face_timer_cb(lv_timer_t *t)
     if (strcmp(name, g_cur_name) == 0)
         return;
     snprintf(g_cur_name, sizeof(g_cur_name), "%s", name);
-    char path[128];
-    snprintf(path, sizeof(path), IMG_DIR "face_%s.png", name);
-    lv_img_set_src(g_img, path);
+    char fname[64];
+    snprintf(fname, sizeof(fname), "face_%s.png", name);
+    lv_img_set_src(g_img, ui_res_img(fname));
 }
 
 /* 组合当前应显示的帧序列并重启轮播 */

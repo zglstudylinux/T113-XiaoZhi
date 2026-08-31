@@ -63,8 +63,15 @@ if(XZ_PLATFORM STREQUAL "host")
         ${CMAKE_SOURCE_DIR}/third_party/lv_drivers/sdl/sdl_common.c)
 endif()
 add_library(lv_drivers STATIC ${LVDRV_SRC})
-target_compile_definitions(lv_drivers PRIVATE
-    $<IF:$<STREQUAL:${XZ_PLATFORM},host>,USE_SDL=1 USE_SUNXIFB=0,USE_SUNXIFB=1 USE_EVDEV=1>)
+# 显示后端宏全局注入（lv_drv_conf.h 的 USE_SDL/USE_SUNXIFB/USE_EVDEV/
+# SDL_HOR_RES 均为 #ifndef 守卫，可被 -D 覆盖）。必须全局：port_display.c
+#（xiaozhi target）与 lv_drivers 自身都要看到同一套宏。
+# host（PC 模拟器）：SDL 窗口 480×640 竖屏（与板同尺寸）。
+if(XZ_PLATFORM STREQUAL "host")
+    add_compile_definitions(USE_SDL=1 USE_SUNXIFB=0 SDL_HOR_RES=480 SDL_VER_RES=640)
+else()
+    add_compile_definitions(USE_SUNXIFB=1 USE_EVDEV=1)
+endif()
 
 add_library(cjson STATIC ${CMAKE_SOURCE_DIR}/third_party/cjson/cJSON.c)
 
@@ -91,6 +98,13 @@ if(XZ_PLATFORM STREQUAL "host")
 endif()
 
 add_executable(xiaozhi ${APP_SRC})
+# 资源路径编译期兜底：板上=部署目录；host=仓库 assets（运行时 ui_res 会先
+# 探测 env/exe 同目录/上级 assets，见 ui/ui_res.c）
+if(XZ_PLATFORM STREQUAL "t113")
+    target_compile_definitions(xiaozhi PRIVATE XZ_RES_PATH="/mnt/UDISK/xiaozhi")
+else()
+    target_compile_definitions(xiaozhi PRIVATE XZ_RES_PATH="${CMAKE_SOURCE_DIR}/assets")
+endif()
 target_link_libraries(xiaozhi PRIVATE lvgl lv_drivers cjson xz_osal
     ${XZ_OPUS_LIB}                 # 静态链入（_libs）
     ${XZ_FREETYPE_LIB}

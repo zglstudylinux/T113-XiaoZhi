@@ -95,8 +95,14 @@
 #endif
 
 #if USE_SDL || USE_SDL_GPU
-#  define SDL_HOR_RES     480
-#  define SDL_VER_RES     320
+/* T113-XiaoZhi: 允许构建系统 -D 覆盖（PC 模拟器用 480×640 竖屏，
+ * 与板同尺寸；此处默认值 480×320 横屏不适合本项目） */
+#  ifndef SDL_HOR_RES
+#    define SDL_HOR_RES     480
+#  endif
+#  ifndef SDL_VER_RES
+#    define SDL_VER_RES     320
+#  endif
 
 /* Scale window by this factor (useful when simulating small screens) */
 #  define SDL_ZOOM        1

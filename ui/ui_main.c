@@ -11,13 +11,12 @@
 #include "ui_msg.h"
 #include "ui_menu.h"
 #include "ui_wifi_setup.h"
+#include "ui_res.h"
 #include "net/xz_protocol.h"
 #include "wifi/wifi_manager.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-#define BG_PATH  "S:/mnt/UDISK/xiaozhi/images/bg_main.png"
 
 static lv_obj_t *g_bg;
 static lv_obj_t *g_state_label;
@@ -73,7 +72,7 @@ void ui_main_create(lv_obj_t *scr)
 
     /* 全屏背景图（星空），置于最底层 */
     g_bg = lv_img_create(scr);
-    lv_img_set_src(g_bg, BG_PATH);
+    lv_img_set_src(g_bg, ui_res_img("bg_main.png"));
     lv_obj_set_pos(g_bg, 0, 0);
     lv_obj_set_size(g_bg, 480, 640);
     lv_obj_move_to_index(g_bg, 0);

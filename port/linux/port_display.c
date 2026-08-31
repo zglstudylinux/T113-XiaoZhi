@@ -10,13 +10,12 @@
 #include "lvgl/src/extra/libs/png/lv_png.h"
 #include "lv_freetype.h"
 #include "osal/osal_log.h"
+#include "ui_res.h"
 
 #include <stdio.h>
 
-/* 板上资源路径（deploy.sh 推送目标）。
- * rootfs overlay 只有 ~8MB，资源放 /mnt/UDISK。 */
-#define BOARD_RES_PATH   "/mnt/UDISK/xiaozhi"
-#define FONT_CN_REGULAR  BOARD_RES_PATH "/fonts/SOURCEHANSANSCN_REGULAR.OTF"
+/* 字体文件名（目录经 ui_res_font 运行时解析，见 ui_res.h） */
+#define FONT_CN_REGULAR  "SOURCEHANSANSCN_REGULAR.OTF"
 
 /* UI 用字体（ui_main.c extern 引用） */
 lv_font_t *ui_font_cn_24;
@@ -63,28 +62,21 @@ int port_display_init(void)
     /* PNG 解码器（表情脸/背景素材）+ FreeType 中文字体 */
     lv_png_init();
     lv_freetype_init(4, 4, 128 * 1024);
-    static lv_ft_info_t ft48 = {
-        .name = FONT_CN_REGULAR,
-        .weight = 48,
-        .style = FT_FONT_STYLE_NORMAL,
-    };
-    static lv_ft_info_t ft32 = {
-        .name = FONT_CN_REGULAR,
-        .weight = 32,
-        .style = FT_FONT_STYLE_NORMAL,
-    };
-    static lv_ft_info_t ft24 = {
-        .name = FONT_CN_REGULAR,
-        .weight = 24,
-        .style = FT_FONT_STYLE_NORMAL,
-    };
+    /* .name 不能走静态初始化（ui_res_font 是运行时解析），函数体里赋值 */
+    static lv_ft_info_t ft48, ft32, ft24;
+    ft48.name = ui_res_font(FONT_CN_REGULAR);
+    ft32.name = ui_res_font(FONT_CN_REGULAR);
+    ft24.name = ui_res_font(FONT_CN_REGULAR);
+    ft48.weight = 48;  ft48.style = FT_FONT_STYLE_NORMAL;
+    ft32.weight = 32;  ft32.style = FT_FONT_STYLE_NORMAL;
+    ft24.weight = 24;  ft24.style = FT_FONT_STYLE_NORMAL;
     if (lv_ft_font_init(&ft48) && lv_ft_font_init(&ft32)
         && lv_ft_font_init(&ft24)) {
         ui_font_cn_48 = ft48.font;
         ui_font_cn_32 = ft32.font;
         ui_font_cn_24 = ft24.font;
     } else {
-        XZ_LOGE("port", "freetype font load FAIL: %s", FONT_CN_REGULAR);
+        XZ_LOGE("port", "freetype font load FAIL: %s", ui_res_font(FONT_CN_REGULAR));
     }
     return 0;
 }

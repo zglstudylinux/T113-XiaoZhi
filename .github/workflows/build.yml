@@ -1,0 +1,52 @@
+name: build
+
+# PC 模拟器（host 构建）编译门禁 + 可运行产物。
+# 说明：只做 x86 host CI（方案确认的决策）；ARM 交叉由本地
+# ./scripts/build.sh t113 承担（需要 SDK staging，CI 不具备）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  host-sim:
+    name: PC simulator (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config \
+            libasound2-dev libssl-dev libspeexdsp-dev \
+            libfreetype-dev libopus-dev \
+            zlib1g-dev libbz2-dev libsdl2-dev
+
+      - name: Build host simulator
+        run: ./scripts/build.sh host
+
+      - name: Smoke test (headless, xvfb)
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb
+          # 无显示环境下起窗口跑 5 秒：不崩（exit 124=timeout 杀掉）即过。
+          # 无 wlroots/X 合成器时 SDL 可用 dummy video driver 验证初始化路径。
+          xvfb-run -a timeout 5 ./build-host/xiaozhi || [ $? -eq 124 ]
+          echo "smoke ok: process survived 5s under xvfb"
+
+      - name: Package artifact
+        run: |
+          mkdir -p xiaozhi-sim
+          cp build-host/xiaozhi xiaozhi-sim/
+          cp -r assets xiaozhi-sim/assets
+          tar czf xiaozhi-sim-linux64.tar.gz xiaozhi-sim
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaozhi-sim-linux64
+          path: xiaozhi-sim-linux64.tar.gz
+          retention-days: 14
