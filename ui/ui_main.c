@@ -258,6 +258,8 @@ typedef struct {
     char text[256];
 } chat_msg_t;
 
+static void scroll_chat_to_bottom(void *unused);
+
 static void chat_add_async(void *p)
 {
     chat_msg_t *m = (chat_msg_t *)p;
@@ -303,14 +305,30 @@ static void chat_add_async(void *p)
     if (cnt > 8)
         lv_obj_del(lv_obj_get_child(g_chat_box, 0));
 
-    /* 布局先强制重算再滚底：LVGL flex 布局下帧刷新才生效，加完立刻
-     * scroll_to_view 拿到的是旧几何 → 新气泡停在视区外（手动滑一下才见）。
-     * stt/tts 每条都走这里，强制重排后自动贴底实时可见 */
+    /* 布局重算后同步贴底一次（滚动不变量：内容高-视口高，不依赖随滚动
+     * 平移的子坐标）。首条消息时聊天容器刚从 HIDDEN 转可见，同拍内几何
+     * 可能仍是隐藏期的旧值 → 同步滚可能漏；故再 post 一拍 lv_async 兜底
+     * （运行在下一刷新周期，几何必为最终值；重滚幂等，平时无感）。 */
     lv_obj_update_layout(g_chat_box);
-    lv_coord_t bottom = lv_obj_get_scroll_bottom(g_chat_cont);
-    if (bottom > 0)
-        lv_obj_scroll_to_y(g_chat_cont, bottom, LV_ANIM_OFF);
+    scroll_chat_to_bottom(NULL);
+    lv_async_call(scroll_chat_to_bottom, NULL);
     free(m);
+}
+
+/* 贴底：同步版 + lv_async 延迟版共用（签名匹配 lv_async_cb_t） */
+static void scroll_chat_to_bottom(void *unused)
+{
+    (void)unused;
+    if (g_page_gone || g_chat_box == NULL || g_chat_cont == NULL)
+        return;
+    lv_obj_update_layout(g_chat_box);
+    lv_coord_t content_h = lv_obj_get_height(g_chat_box);
+    lv_coord_t view_h = lv_obj_get_height(g_chat_cont)
+                      - lv_obj_get_style_pad_top(g_chat_cont, LV_PART_MAIN)
+                      - lv_obj_get_style_pad_bottom(g_chat_cont, LV_PART_MAIN);
+    lv_coord_t overscroll = content_h - view_h;
+    if (overscroll > 0)
+        lv_obj_scroll_to_y(g_chat_cont, overscroll, LV_ANIM_OFF);
 }
 
 void ui_main_add_chat(uint8_t from_user, const char *text)

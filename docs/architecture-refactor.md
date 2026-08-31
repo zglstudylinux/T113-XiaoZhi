@@ -187,14 +187,14 @@ int  app_api_wifi_state(void);
 
 | 阶段 | 内容 | 验证 | 板测 |
 |---|---|---|---|
-| P0 | 本文档 | — | — |
-| P1 CMake 化 | CMakeLists + toolchain/deps + build.sh；**src/ 布局不动**；删 Makefile；删 third_party/bt | t113 产物 `readelf -d` 与旧产物一致 | 冒烟 |
-| P2 重组+OSAL | git mv 迁移映射；osal 9 头+posix 实现；app 层机械替换；port 拆出 | 编译过 | **🧪 板测 1**（全链路对话） |
+| P0 ✅ | 本文档 | — | — |
+| P1 CMake 化 ✅ | CMakeLists + toolchain/deps + build.sh；**src/ 布局不动**；删 Makefile；删 third_party/bt | t113 产物 `readelf -d` 12 项依赖与旧产物逐一一致 | 冒烟 |
+| P2 重组+OSAL ✅ | git mv 迁移映射；osal 9 头+posix 实现；app 层机械替换；port 拆出 | 编译过 | **🧪 板测 1 ✅ 通过（2026-08-31）**：WiFi 自动重连（zgl 热点）、OTA、TLS+ws hello 握手、状态机驱动 UI、表情脸渲染（fb 抓帧）、**全链路语音对话**（说话→STT→回复→TTS 播放）全部正常。期间修复聊天区自动贴底 bug（见风险 9/10） |
 | P3 模拟器+CI | port/sdl + ui_res + build.yml | 本机 SDL 窗口可导航；Actions 绿 | 不需 |
 | P4 解耦 | 事件总线、controller、app_api、app_state 修 bug、ui_facade、main 瘦身 | grep：ui/∩业务头=空 | **🧪 板测 2**（配网/切页/重连） |
 | P5 配置统一 | app_config 收敛 7 文件常量；http_client 去重；README | 改 config.ini 生效 | 并入板测 2 |
 
-push 节奏：P2 板测通过后 push；P3 完成即 push（备注未上板）；P4 板测通过后 push。
+push 节奏：~~P2 板测通过后 push~~ ✅ P2 已板测通过并 push；P3 完成即 push（备注未上板）；P4 板测通过后 push。
 push 走代理：`git -c http.proxy=http://192.168.1.4:7897 push origin main`。
 
 ## 9. 风险与坑（已核实）
@@ -208,3 +208,10 @@ push 走代理：`git -c http.proxy=http://192.168.1.4:7897 push origin main`。
 6. **事件时序**：解耦后成对事件合并为一条 post（ui_msg 队列深 32 丢最旧，防风暴丢面大）。
 7. **gcc-13 vs gcc-8** 新警告：host 平台单独 `-Wno-*`，不污染 t113 flag。
 8. **remote URL 内嵌 PAT**：建议后续吊销换 SSH/credential helper（本次不动）。
+9. **LVGL 滚动贴底**（板测 1 踩中）：`lv_obj_get_scroll_bottom()` 走子对象 `coords.y2`
+   路径，coords 随容器滚动被平移 → 滚过一次后每次算出的贴底量带偏差（表现为只自动滚
+   前一两条）。正确做法：`update_layout` 后用**滚动不变量** `内容高 − 视口净高` 算贴底量；
+   首条消息时容器刚从 HIDDEN 转可见、同拍几何是旧值，需再 `lv_async_call` 延迟一拍幂等重滚。
+10. **app 自动重连窗口 vs wpa 首次扫描竞争**（板测 1 踩中）：app 启动时若 wpa_supplicant
+    还在 SCANNING/ASSOCIATING，重连窗口（~20s）耗尽即判失败进配网页——即使热点可见。
+    绕过：先等 WiFi 连上再起 app。根治（P4/P5 候选）：重连改持续后台重试或加长窗口。

@@ -2,7 +2,8 @@
 #
 # deploy.sh — 通过 adb 部署 T113 AI 小智到板子并启动
 #
-#   build/xiaozhi           → /mnt/UDISK/xiaozhi/xiaozhi
+#   build-t113/xiaozhi      → /mnt/UDISK/xiaozhi/xiaozhi（CMake 产物）
+#   （兼容旧 build/xiaozhi）
 #   assets/fonts/*.otf      → /mnt/UDISK/xiaozhi/fonts/
 #
 # 启动用 start-stop-daemon（防 adb 会话退出杀进程）
@@ -25,7 +26,8 @@ $ADB shell "killall bt_speaker" 2>/dev/null || true
 
 echo "[deploy] 推送应用（→ UDISK，rootfs overlay 放不下）..."
 $ADB shell mkdir -p /mnt/UDISK/xiaozhi
-$ADB push "$PROJ_DIR/build/$(${ADB} shell echo ok >/dev/null 2>&1; echo xiaozhi)" "$APP_PATH" 2>/dev/null || $ADB push "$PROJ_DIR/build/xiaozhi" "$APP_PATH"
+[ -f "$PROJ_DIR/build-t113/xiaozhi" ] && BIN="$PROJ_DIR/build-t113/xiaozhi" || BIN="$PROJ_DIR/build/xiaozhi"
+$ADB push "$BIN" "$APP_PATH"
 $ADB shell chmod +x "$APP_PATH"
 
 echo "[deploy] 推送配置 config.ini（板上已有则不覆盖）..."
