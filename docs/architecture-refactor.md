@@ -190,11 +190,11 @@ int  app_api_wifi_state(void);
 | P0 ✅ | 本文档 | — | — |
 | P1 CMake 化 ✅ | CMakeLists + toolchain/deps + build.sh；**src/ 布局不动**；删 Makefile；删 third_party/bt | t113 产物 `readelf -d` 12 项依赖与旧产物逐一一致 | 冒烟 |
 | P2 重组+OSAL ✅ | git mv 迁移映射；osal 9 头+posix 实现；app 层机械替换；port 拆出 | 编译过 | **🧪 板测 1 ✅ 通过（2026-08-31）**：WiFi 自动重连（zgl 热点）、OTA、TLS+ws hello 握手、状态机驱动 UI、表情脸渲染（fb 抓帧）、**全链路语音对话**（说话→STT→回复→TTS 播放）全部正常。期间修复聊天区自动贴底 bug（见风险 9/10） |
-| P3 模拟器+CI | port/sdl + ui_res + build.yml | 本机 SDL 窗口可导航；Actions 绿 | 不需 |
-| P4 解耦 | 事件总线、controller、app_api、app_state 修 bug、ui_facade、main 瘦身 | grep：ui/∩业务头=空 | **🧪 板测 2**（配网/切页/重连） |
-| P5 配置统一 | app_config 收敛 7 文件常量；http_client 去重；README | 改 config.ini 生效 | 并入板测 2 |
+| P3 模拟器+CI ✅ | port/sdl + ui_res + build.yml | 本机 SDL 窗口可导航（480×640 菜单页渲染正常，PC 无网卡走菜单页路径）；Actions 见仓库 | 不需 |
+| P4 解耦 ✅ | 事件总线、controller、app_api、app_state 修 bug（协议线程不再直调 LVGL，见风险 11）、ui_facade、main 瘦身（205→113 行） | grep：ui/∩业务头=空（唯一命中是注释）；app 层无 lvgl include；双平台编译过 | **🧪 板测 2 ✅ 对话链路通过（2026-09-01）**：WiFi 重连→OTA→hello→说话→STT→情绪→两句 TTS 播放，事件经新总线分发行为与解耦前一致；气泡自动滚动无回归。配网全流程（扫密码错/超时分支）未单独重测——逻辑零改动仅换 API 名 |
+| P5 配置统一 | app_config 收敛 7 文件常量；http_client 去重；README | 改 config.ini 生效 | 并入下次板测 |
 
-push 节奏：~~P2 板测通过后 push~~ ✅ P2 已板测通过并 push；P3 完成即 push（备注未上板）；P4 板测通过后 push。
+push 节奏：✅ P2/P3/P4 均已按节奏 push；P5 完成后 push。
 push 走代理：`git -c http.proxy=http://192.168.1.4:7897 push origin main`。
 
 ## 9. 风险与坑（已核实）
@@ -215,3 +215,12 @@ push 走代理：`git -c http.proxy=http://192.168.1.4:7897 push origin main`。
 10. **app 自动重连窗口 vs wpa 首次扫描竞争**（板测 1 踩中）：app 启动时若 wpa_supplicant
     还在 SCANNING/ASSOCIATING，重连窗口（~20s）耗尽即判失败进配网页——即使热点可见。
     绕过：先等 WiFi 连上再起 app。根治（P4/P5 候选）：重连改持续后台重试或加长窗口。
+11. **lv_drv_conf.h 的 SDL_HOR/VER_RES 无守卫**：-D 覆盖会撞重定义——已加 `#ifndef`
+    （本项目改动，升级 lv_drivers 时注意保留）。显示后端宏（USE_SDL/USE_SUNXIFB/
+    USE_EVDEV/SDL_HOR_RES）必须**全局** `add_compile_definitions`：port_display.c 与
+    lv_drivers 库要看到同一套宏，只给 lv_drivers target 加会 sdl.h 声明全被守卫裁掉。
+12. **静态初始化器不能放函数调用**：`static lv_ft_info_t ft = {.name = ui_res_font(...)}`
+    非常量初始化非法（gcc 会拒）。ui_res 运行时化后改为函数体内赋值（port_display.c）。
+13. **ui_res 的两条取径 API**：`ui_res_img()` 返回带 `S:` 盘符的 LVGL 路径（走 lv_fs），
+    `ui_res_font()` 返回真实路径（FreeType 走标准 fopen，不能带盘符）。且两者共用单
+    静态缓冲——**别在同一次调用里混用两个返回值**（后调覆盖前调）。

@@ -12,8 +12,7 @@
 #include "ui_menu.h"
 #include "ui_wifi_setup.h"
 #include "ui_res.h"
-#include "net/xz_protocol.h"
-#include "wifi/wifi_manager.h"
+#include "app/app_api.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,14 +42,13 @@ static const char *state_text(xz_state_t s)
 
 static void talk_btn_event(lv_event_t *e);
 void ui_wifi_setup_open(lv_obj_t *scr);       /* 文件尾：配网页适配器 */
-void xz_app_wifi_setup_done(int connected);   /* main.c 提供 */
 
 static void back_btn_event(lv_event_t *e)
 {
     (void)e;
     /* 回菜单前收尾：停采集会话/停播，协议线程继续跑（重进即复用） */
-    if (xz_protocol_talking())
-        xz_protocol_talk_stop();
+    if (app_api_talking())
+        app_api_talk_stop();
     ui_nav_go(ui_menu_create);        /* ui_menu.h */
 }
 
@@ -102,7 +100,7 @@ void ui_main_create(lv_obj_t *scr)
     ui_face_create(scr);
 
     /* WiFi 态提前检测：决定状态行/信息行内容（未连网时隐藏服务器行） */
-    int no_wifi = (wifi_manager_state() != WIFI_STATE_CONNECTED);
+    int no_wifi = !app_api_wifi_connected();
 
     /* 状态行（脸下方）：未连 WiFi 不显示"点按下方说话"（会误导） */
     g_state_label = lv_label_create(scr);
@@ -169,7 +167,7 @@ void ui_main_create(lv_obj_t *scr)
     lv_obj_add_event_cb(g_talk_btn, talk_btn_event, LV_EVENT_CLICKED, NULL);
 
     /* 进入小智页：WiFi 就绪则确保协议在跑（幂等；覆盖菜单/配网等入口） */
-    xz_app_ensure_protocol();
+    app_api_ensure_started();
 }
 
 /* 说话按钮：toggle talk_start/stop */
@@ -177,22 +175,22 @@ static void talk_btn_event(lv_event_t *e)
 {
     (void)e;
     /* 无 WiFi：按钮变配网入口，跳配网页（成功后由 wifi 流程回小智页） */
-    if (wifi_manager_state() != WIFI_STATE_CONNECTED) {
+    if (!app_api_wifi_connected()) {
         ui_nav_go(ui_wifi_setup_open);      /* 见文件尾适配器 */
         return;
     }
-    if (xz_protocol_talking()) {
-        xz_protocol_talk_stop();
+    if (app_api_talking()) {
+        app_api_talk_stop();
         ui_main_on_state(XZ_STATE_IDLE, "talk stop by button");
     } else {
-        if (xz_protocol_talk_start() == 0) {
+        if (app_api_talk_start() == 0) {
             ui_main_on_state(XZ_STATE_LISTENING, "talk start");
         } else {
             ui_main_on_state(XZ_STATE_ERROR, "talk start fail（未连接？）");
         }
     }
     /* 按钮态跟随 */
-    int on = xz_protocol_talking();
+    int on = app_api_talking();
     lv_obj_set_style_bg_color(g_talk_btn,
         lv_color_hex(on ? 0xD32F2F : 0x1A6FB5), 0);
     lv_label_set_text(g_talk_lbl, on ? "结束" : "点按说话");
@@ -203,7 +201,7 @@ void ui_main_on_state(xz_state_t s, const char *reason)
     if (g_page_gone || g_state_label == NULL)
         return;
     /* 无 WiFi 时状态行固定（协议连不上刷屏没意义） */
-    if (wifi_manager_state() != WIFI_STATE_CONNECTED &&
+    if (!app_api_wifi_connected() &&
         (s == XZ_STATE_IDLE || s == XZ_STATE_CONNECTING)) {
         lv_label_set_text(g_state_label, "未连接 WiFi");
         return;
@@ -345,7 +343,7 @@ void ui_main_add_chat(uint8_t from_user, const char *text)
 /* 配网页适配器（ui_nav_go 需要.lv_obj_t* 参数形式） */
 void ui_wifi_setup_open(lv_obj_t *scr)
 {
-    ui_wifi_setup_create_ex(scr, xz_app_wifi_setup_done);
+    ui_wifi_setup_create_ex(scr, app_api_wifi_setup_done);
 }
 
 /* 未绑定设备：状态行大字显示 6 位验证码（用户到 xiaozhi.me 控制台绑定） */

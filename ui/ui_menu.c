@@ -9,7 +9,7 @@
 #include "ui_main.h"
 #include "ui_wifi_setup.h"
 #include "ui_res.h"
-#include "wifi/wifi_manager.h"
+#include "app/app_api.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -130,7 +130,7 @@ void ui_menu_create(lv_obj_t *scr)
     lv_obj_set_style_text_font(sub, ui_font_cn_24, 0);
     lv_obj_set_style_text_color(sub, lv_color_hex(0x8FA3B8), 0);
     lv_label_set_text_fmt(sub, "T113 语音助手  ·  WiFi %s",
-        wifi_manager_state() == WIFI_STATE_CONNECTED ? "已连接" : "未连接");
+        app_api_wifi_connected() ? "已连接" : "未连接");
     lv_obj_align(sub, LV_ALIGN_TOP_LEFT, 26, 86);
 
     for (unsigned i = 0; i < sizeof(g_pages) / sizeof(g_pages[0]); i++)

@@ -1,8 +1,12 @@
 /*
- * app_state.c — 小智设备状态机（M0 骨架：仅记录 + 通知 UI）
+ * app_state.c — 小智设备状态机
+ *
+ * P4：set() 不再直调 ui_main_on_state（协议线程摸 LVGL 的线程违规），
+ * 改发 APP_EVT_STATE 经 ui_msg 泵到主线程（多经一拍 20ms，肉眼不可见）。
  */
 #include "app_state.h"
-#include "ui_main.h"
+#include "app_events.h"
+#include "app_event_bus.h"
 #include "osal/osal_atomic.h"
 #include <string.h>
 
@@ -25,5 +29,6 @@ void app_state_deinit(void)
 void app_state_set(xz_state_t s, const char *reason)
 {
     osal_atomic_set(&g_state, s);
-    ui_main_on_state(s, reason);
+    /* 状态同步走事件总线（主线程应用）；reason 作为 data 携带 */
+    app_event_post(APP_EVT_STATE, reason, (int)s, NULL, 0);
 }

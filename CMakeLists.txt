@@ -31,6 +31,7 @@ add_compile_options(-Wall -Wno-unused-function -Wno-unused-parameter
 add_compile_definitions(LV_USE_PNG=1 LV_USE_FS_POSIX=1)
 
 include_directories(
+    ${CMAKE_SOURCE_DIR}                         # "app/app_api.h" 等跨层引用
     ${CMAKE_SOURCE_DIR}/main
     ${CMAKE_SOURCE_DIR}/app
     ${CMAKE_SOURCE_DIR}/app/net
@@ -45,7 +46,6 @@ include_directories(
     ${XZ_INCLUDE_DIRS}
 )
 
-# ---- 第三方 ----
 # lvgl 8.3.1：仓库只有 lvgl.mk（上游 CMakeLists 已删），自写 GLOB 等价编译。
 # lv_conf.h 在 ui/，__has_include("lv_conf.h") 自动启用 LV_CONF_INCLUDE_SIMPLE。
 file(GLOB_RECURSE LVGL_SRC CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/third_party/lvgl/src/*.c)

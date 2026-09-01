@@ -17,9 +17,6 @@ void ui_main_create(lv_obj_t *scr);
 /* 配网页 create 适配器（main.c 启动失败路径用） */
 void ui_wifi_setup_open(lv_obj_t *scr);
 
-/* main.c 提供：确保协议已启动（幂等；进小智页后调用） */
-void xz_app_ensure_protocol(void);
-
 /* 未绑定设备：状态行大字显示 6 位验证码（主线程内调用） */
 void ui_main_show_activation(const char *code);
 

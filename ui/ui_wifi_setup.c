@@ -16,7 +16,7 @@
 #include "ui_menu.h"
 #include "ui_navigate.h"
 #include "ui_msg.h"
-#include "wifi_manager.h"
+#include "app/app_api.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -104,7 +104,7 @@ static void *scan_thread(void *arg)
 {
     (void)arg;
     scan_msg_t_ *m = &g_scan_cache;
-    m->count = wifi_manager_scan(m->aps, WIFI_MAX_AP);
+    m->count = app_api_wifi_scan(m->aps, WIFI_MAX_AP);
     ui_msg_post(do_scan_async, m);
     return NULL;
 }
@@ -156,11 +156,12 @@ static void *connect_thread(void *arg)
     psk[sizeof(psk) - 1] = '\0';
 
     conn_msg_t *m = (conn_msg_t *)malloc(sizeof(conn_msg_t));
-    m->result = wifi_manager_connect(g_sel_ssid, g_sel_open ? NULL : psk, 25000);
-    const char *ip = wifi_manager_get_ip();
-    snprintf(m->ip, sizeof(m->ip), "%s", ip ? ip : "?");
+    m->result = app_api_wifi_connect(g_sel_ssid, g_sel_open ? NULL : psk, 25000);
+    char ip[32];
+    app_api_get_net_info(ip, sizeof(ip), NULL, 0);
+    snprintf(m->ip, sizeof(m->ip), "%s", ip[0] ? ip : "?");
     if (m->result == 0)
-        wifi_manager_save_cfg(g_sel_ssid, psk);
+        app_api_wifi_save(g_sel_ssid, psk);
     ui_msg_post(conn_done_async, m);
     return NULL;
 }
