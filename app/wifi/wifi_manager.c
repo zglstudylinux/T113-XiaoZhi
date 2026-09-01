@@ -8,6 +8,7 @@
  * WRONG_KEY），命令收发走独立 cmd socket（请求-应答，无事件混入）。
  */
 #include "wifi_manager.h"
+#include "app_config.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +28,7 @@
 #define WPA_CTRL_PATH    WPA_CTRL_DIR "/" WPA_IFACE
 #define DRV_KO           "/lib/modules/5.4.61/8723ds.ko"
 
-#define WIFI_CFG_PATH    "/mnt/UDISK/xiaozhi/wifi.cfg"
+
 
 #define REPLY_MAX        4096
 
@@ -420,9 +421,9 @@ int wifi_manager_dhcp(int timeout_ms)
 
 int wifi_manager_save_cfg(const char *ssid, const char *psk)
 {
-    FILE *f = fopen(WIFI_CFG_PATH, "w");
+    FILE *f = fopen(app_config_path("wifi.cfg"), "w");
     if (!f) {
-        printf("[wifi] 保存配置失败: %s\n", WIFI_CFG_PATH);
+        printf("[wifi] 保存配置失败: %s\n", app_config_path("wifi.cfg"));
         return -1;
     }
     fprintf(f, "%s\n%s\n", ssid ? ssid : "", psk ? psk : "");
@@ -432,7 +433,7 @@ int wifi_manager_save_cfg(const char *ssid, const char *psk)
 
 int wifi_manager_load_cfg(char *ssid, int ssid_sz, char *psk, int psk_sz)
 {
-    FILE *f = fopen(WIFI_CFG_PATH, "r");
+    FILE *f = fopen(app_config_path("wifi.cfg"), "r");
     if (!f)
         return -1;
     char buf[128];

@@ -192,7 +192,7 @@ int  app_api_wifi_state(void);
 | P2 重组+OSAL ✅ | git mv 迁移映射；osal 9 头+posix 实现；app 层机械替换；port 拆出 | 编译过 | **🧪 板测 1 ✅ 通过（2026-08-31）**：WiFi 自动重连（zgl 热点）、OTA、TLS+ws hello 握手、状态机驱动 UI、表情脸渲染（fb 抓帧）、**全链路语音对话**（说话→STT→回复→TTS 播放）全部正常。期间修复聊天区自动贴底 bug（见风险 9/10） |
 | P3 模拟器+CI ✅ | port/sdl + ui_res + build.yml | 本机 SDL 窗口可导航（480×640 菜单页渲染正常，PC 无网卡走菜单页路径）；Actions 见仓库 | 不需 |
 | P4 解耦 ✅ | 事件总线、controller、app_api、app_state 修 bug（协议线程不再直调 LVGL，见风险 11）、ui_facade、main 瘦身（205→113 行） | grep：ui/∩业务头=空（唯一命中是注释）；app 层无 lvgl include；双平台编译过 | **🧪 板测 2 ✅ 对话链路通过（2026-09-01）**：WiFi 重连→OTA→hello→说话→STT→情绪→两句 TTS 播放，事件经新总线分发行为与解耦前一致；气泡自动滚动无回归。配网全流程（扫密码错/超时分支）未单独重测——逻辑零改动仅换 API 名 |
-| P5 配置统一 | app_config 收敛 7 文件常量；http_client 去重；README | 改 config.ini 生效 | 并入下次板测 |
+| P5 配置统一 ✅ | app_config（数据目录 XZ_DATA_DIR 收敛：config.ini/wifi.cfg/diag dump 3 处归 1）；协议常量（OTA URL/UA/板型/默认 ws）进 app_config.h；ini 解析抽 app_config_load_ini；http_client.c 抽出（https_post 平移，行为逐行等价）；README 重写构建/目录段 | 改 config.ini 生效（路径解析逻辑未变，编译期验证 + 双平台构建过） | 复用板测 2 结论（config.ini 读取路径经 app_config_path，板上已验证同一文件） |
 
 push 节奏：✅ P2/P3/P4 均已按节奏 push；P5 完成后 push。
 push 走代理：`git -c http.proxy=http://192.168.1.4:7897 push origin main`。

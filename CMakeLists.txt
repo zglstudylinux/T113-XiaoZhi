@@ -101,9 +101,12 @@ add_executable(xiaozhi ${APP_SRC})
 # 资源路径编译期兜底：板上=部署目录；host=仓库 assets（运行时 ui_res 会先
 # 探测 env/exe 同目录/上级 assets，见 ui/ui_res.c）
 if(XZ_PLATFORM STREQUAL "t113")
-    target_compile_definitions(xiaozhi PRIVATE XZ_RES_PATH="/mnt/UDISK/xiaozhi")
+    target_compile_definitions(xiaozhi PRIVATE
+        XZ_RES_PATH="/mnt/UDISK/xiaozhi" XZ_DATA_DIR="/mnt/UDISK/xiaozhi")
 else()
-    target_compile_definitions(xiaozhi PRIVATE XZ_RES_PATH="${CMAKE_SOURCE_DIR}/assets")
+    target_compile_definitions(xiaozhi PRIVATE
+        XZ_RES_PATH="${CMAKE_SOURCE_DIR}/assets"
+        XZ_DATA_DIR="${CMAKE_SOURCE_DIR}/assets")
 endif()
 target_link_libraries(xiaozhi PRIVATE lvgl lv_drivers cjson xz_osal
     ${XZ_OPUS_LIB}                 # 静态链入（_libs）

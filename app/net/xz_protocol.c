@@ -10,6 +10,8 @@
  */
 #include "xz_protocol.h"
 #include "ws_client.h"
+#include "http_client.h"
+#include "app_config.h"
 #include "cJSON.h"
 #include "audio_cap.h"
 #include "audio_play.h"
@@ -27,10 +29,6 @@
 #include <string.h>
 #include <strings.h>
 
-#define CFG_PATH      "/mnt/UDISK/xiaozhi/config.ini"
-#define DEF_WS_URL    "wss://api.tenclass.net/xiaozhi/v1/"
-#define DEF_TOKEN     "test"
-
 /* ---------------- 配置 ---------------- */
 
 typedef struct {
@@ -42,41 +40,18 @@ typedef struct {
 
 static xz_cfg_t g_cfg;
 
-/* 简单 ini 读取：key = value（无节、去首尾空白） */
-static void cfg_parse(const char *path, xz_cfg_t *c)
+/* ini 字段回调（app_config_load_ini 逐行调） */
+static void cfg_kv(void *user, const char *key, const char *val)
 {
-    snprintf(c->ws_url, sizeof(c->ws_url), "%s", DEF_WS_URL);
-    snprintf(c->token, sizeof(c->token), "%s", DEF_TOKEN);
-    snprintf(c->device_id, sizeof(c->device_id), "%s", "00:00:00:00:00:00");
-    snprintf(c->client_id, sizeof(c->client_id), "%s", "5df31a2c-8b7e-4a3f-9c1d-2e6f7a8b9c0d");
-
-    osal_file_t *f = osal_fopen(path, "r");
-    if (!f)
-        return;
-    char line[256];
-    while (osal_getline(line, sizeof(line), f)) {
-        char *eq = strchr(line, '=');
-        if (!eq) continue;
-        *eq = '\0';
-        char *key = line, *val = eq + 1;
-        /* 去空白 */
-        while (*key == ' ' || *key == '\t') key++;
-        char *e = key + strlen(key);
-        while (e > key && (e[-1] == ' ' || e[-1] == '\t')) *--e = '\0';
-        while (*val == ' ' || *val == '\t') val++;
-        e = val + strlen(val);
-        while (e > val && (e[-1] == ' ' || e[-1] == '\t' ||
-                           e[-1] == '\n' || e[-1] == '\r')) *--e = '\0';
-        if (strcmp(key, "ws_url") == 0)
-            snprintf(c->ws_url, sizeof(c->ws_url), "%s", val);
-        else if (strcmp(key, "token") == 0)
-            snprintf(c->token, sizeof(c->token), "%s", val);
-        else if (strcmp(key, "device_id") == 0)
-            snprintf(c->device_id, sizeof(c->device_id), "%s", val);
-        else if (strcmp(key, "client_id") == 0)
-            snprintf(c->client_id, sizeof(c->client_id), "%s", val);
-    }
-    osal_fclose(f);
+    xz_cfg_t *c = (xz_cfg_t *)user;
+    if (strcmp(key, "ws_url") == 0)
+        snprintf(c->ws_url, sizeof(c->ws_url), "%s", val);
+    else if (strcmp(key, "token") == 0)
+        snprintf(c->token, sizeof(c->token), "%s", val);
+    else if (strcmp(key, "device_id") == 0)
+        snprintf(c->device_id, sizeof(c->device_id), "%s", val);
+    else if (strcmp(key, "client_id") == 0)
+        snprintf(c->client_id, sizeof(c->client_id), "%s", val);
 }
 
 /* 取 wlan0 MAC 做 Device-Id（失败保留默认） */
@@ -133,117 +108,18 @@ const char *xz_protocol_activation_code(void)
  * 官方流程（xiaozhi-esp32 / py-xiaozhi 同款）：启动时 POST 固件信息到 OTA
  * 接口完成设备注册；未绑定设备响应里多一个 activation 字段（含 6 位验证码，
  * 用户在 xiaozhi.me 控制台输入绑定）。不带这步直接连 ws 会被服务器空 close。
+ * HTTP 传输在 http_client.c（P5 从本文件抽出）。
  */
-
-#define OTA_URL  "https://api.tenclass.net/xiaozhi/ota/"
-
-/* 极简 HTTPS POST（传输走 osal_net + osal_tls，证书不校验——板上无 CA bundle）。
- * 返回响应 body（malloc，调用方 free）；失败 NULL */
-static char *https_post(const char *url, const char *headers[], int nhdr,
-                        const char *body)
-{
-    /* 解析 url */
-    const char *p = url;
-    int use_tls = 1;
-    if (strncmp(url, "https://", 8) == 0) p = url + 8;
-    else if (strncmp(url, "http://", 7) == 0) { use_tls = 0; p = url + 7; }
-    else return NULL;
-
-    static char host[128], path[192];
-    const char *slash = strchr(p, '/');
-    size_t hostlen = slash ? (size_t)(slash - p) : strlen(p);
-    if (hostlen >= sizeof(host)) hostlen = sizeof(host) - 1;
-    memcpy(host, p, hostlen);
-    host[hostlen] = '\0';
-    snprintf(path, sizeof(path), "%s", slash ? slash : "/");
-    char port[8] = {0};
-    char *colon = strchr(host, ':');
-    if (colon) { snprintf(port, sizeof(port), "%s", colon + 1); *colon = '\0'; }
-    if (!port[0]) snprintf(port, sizeof(port), "%s", use_tls ? "443" : "80");
-
-    /* TCP + TLS（osal：非阻塞 connect/poll 超时 + 5s 收发超时都在内） */
-    osal_sock_t fd = OSAL_SOCK_INVALID;
-    if (osal_net_tcp_connect(host, port, 10000, &fd) != OSAL_OK) {
-        XZ_LOGE("ota", "tcp connect %s fail", host);
-        return NULL;
-    }
-    osal_tls_t *tls = NULL;
-    if (use_tls) {
-        if (osal_tls_connect(&tls, fd, host, 15000) != OSAL_OK) {
-            XZ_LOGE("ota", "tls fail");
-            osal_net_close(fd);
-            return NULL;
-        }
-    }
-
-    /* 组请求 */
-    char req[3072];
-    int off = snprintf(req, sizeof(req),
-        "POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\n"
-        "User-Agent: xiaozhi-t113/1.0.0\r\n"
-        "Content-Length: %zu\r\n", path, host, strlen(body));
-    for (int i = 0; i < nhdr; i++)
-        off += snprintf(req + off, sizeof(req) - off, "%s\r\n", headers[i]);
-    off += snprintf(req + off, sizeof(req) - off, "\r\n%s", body);
-    XZ_LOGI("ota", "POST %s%s body(%zu): %s", host, path, strlen(body), body);
-
-    /* 发送 */
-    int wr = tls ? osal_tls_write(tls, req, (size_t)off)
-                 : osal_net_send(fd, req, (size_t)off);
-    if (wr != OSAL_OK) {
-        XZ_LOGE("ota", "send fail");
-        if (tls) osal_tls_close(tls);
-        osal_net_close(fd);
-        return NULL;
-    }
-
-    /* 读响应（一次性，最多 8KB） */
-    static char rbuf[8192];
-    size_t got = 0;
-    while (got < sizeof(rbuf) - 1) {
-        int n = tls ? osal_tls_read(tls, rbuf + got, sizeof(rbuf) - 1 - got)
-                    : osal_net_recv(fd, rbuf + got, sizeof(rbuf) - 1 - got);
-        if (n <= 0) break;
-        got += (size_t)n;
-        /* 头读完后按 Content-Length 判断收全 */
-        rbuf[got] = '\0';
-        char *cl = strstr(rbuf, "Content-Length:");
-        char *hdr_end = strstr(rbuf, "\r\n\r\n");
-        if (cl && hdr_end) {
-            size_t want = (size_t)atoi(cl + 15);
-            if (got >= (size_t)(hdr_end - rbuf) + 4 + want)
-                break;
-        }
-    }
-    rbuf[got] = '\0';
-    if (tls) osal_tls_close(tls);
-    osal_net_close(fd);
-
-    if (got == 0) { XZ_LOGE("ota", "empty response"); return NULL; }
-    char *body_start = strstr(rbuf, "\r\n\r\n");
-    if (!body_start) { XZ_LOGE("ota", "bad response:\n%.200s", rbuf); return NULL; }
-    body_start += 4;
-    /* chunked 编码简化处理：只取第一个 chunk */
-    if (strncasecmp(rbuf, "HTTP/1.1 2", 10) != 0)
-        XZ_LOGW("ota", "http status: %.30s", rbuf);
-    char *dup = strdup(body_start);
-    if (!dup) return NULL;
-    /* body 若是 chunked（nginx 一般已解掉），跳过第一行 chunk 长度 */
-    if (dup[0] >= '0' && dup[0] <= '9' && dup[1] == '\r' && dup[2] == '\n') {
-        memmove(dup, dup + 3, strlen(dup + 3) + 1);
-    }
-    return dup;
-}
 
 /* OTA 注册：成功返回 0（g_ws_token/g_activation_code 已填） */
 static int ota_register(void)
 {
     char body[512];
-    /* board.type 必须是官方已注册的板型名（面包板兼容方案），
+    /* board.type 必须是官方已注册的板型名（宏在 app_config.h），
      * version=2 对应官方固件当前协议版本 */
     snprintf(body, sizeof(body),
-        "{\"application\":{\"version\":2,\"chip_model_name\":\"esp32s3\","
-        "\"board\":{\"type\":\"bread-compact-wifi\",\"mac_address\":\"%s\","
+        "{\"application\":{\"version\":2,\"chip_model_name\":\"" XZ_REPORT_CHIP "\","
+        "\"board\":{\"type\":\"" XZ_REPORT_BOARD "\",\"mac_address\":\"%s\","
         "\"uuid\":\"%s\"}}}",
         g_cfg.device_id, g_cfg.client_id);
 
@@ -254,7 +130,7 @@ static int ota_register(void)
     hdrs[0] = dev_hdr;
     hdrs[1] = cli_hdr;
 
-    char *resp = https_post(OTA_URL, hdrs, 2, body);
+    char *resp = http_post(XZ_OTA_URL, hdrs, 2, body);
     if (!resp) {
         /* 退回配置里的 ws_url + token */
         snprintf(g_ws_token, sizeof(g_ws_token), "%s", g_cfg.token);
@@ -591,7 +467,7 @@ int xz_protocol_start(xz_evt_cb_t cb, void *user)
     g_ws_token[0] = '\0';
     g_activation_code[0] = '\0';
 
-    cfg_parse(CFG_PATH, &g_cfg);
+    app_config_load_ini(app_config_path("config.ini"), cfg_kv, &g_cfg);
     fill_device_id(&g_cfg);
     printf("[xz] cfg: url=%s device=%s client=%s\n",
            g_cfg.ws_url, g_cfg.device_id, g_cfg.client_id);

@@ -8,37 +8,51 @@ WiFi 联网，点按开始说话，服务器 ASR/LLM/TTS，板子喇叭回答，
   下行 Opus → 解码 → 重采样 → hw:audiocodec 喇叭
 - 屏显链路：sunxifb(/dev/fb0 32bpp) + evdev(/dev/input/event4)，FreeType 中文字体
 
-## 目录结构
+## 目录结构（P2 重构后分层）
 
 ```
-├── Makefile               # 交叉编译（基线复用 T113-bluetooth-speaker 验证过的 Makefile）
-├── scripts/setup.sh       # 首次：复制 toolchain + 交叉编译 opus-1.3.1 → _libs/
-├── scripts/deploy.sh      # adb 部署 + start-stop-daemon 启动（与蓝牙音箱互斥）
-├── scripts/test_alsa.sh   # 板上录音自检
-├── third_party/           # lvgl 8.3.1 / lv_drivers / freetype（vendored）
-├── assets/fonts/          # 思源黑体 .otf
-├── assets/images/         # UI 素材 PNG（tools/gen_assets.py 生成）
-├── src/                   # 应用源码（net/audio/wifi/ui 模块化）
-│   └── ui/                # ui_navigate 切屏管理 / ui_menu 菜单 /
-│                          # ui_face 表情脸 / ui_msg 线程→UI 消息队列
-├── tools/gen_assets.py    # PIL 素材生成器（背景+表情脸+菜单图标）
-└── docs/plan.md           # 项目计划（里程碑与踩坑记录）
+├── CMakeLists.txt  cmake/  scripts/    # CMake 双平台构建（t113 交叉 / host PC）
+├── main/main.c           # 入口（纯装配：port → facade → 启动页 → 主循环）
+├── app/                  # 业务层（纯 C99，禁 LVGL——编译期强制分层）
+│   ├── app_api.c/.h      # UI→业务唯一入口
+│   ├── app_events.h + app_event_bus.c   # 业务→UI 事件总线
+│   ├── app_state.c       # 状态机（发事件不摸 UI）
+│   ├── controller.c      # 协议事件分发
+│   ├── app_config.c/.h   # 数据目录 + 协议常量收敛（P5）
+│   ├── net/              # ws_client / xz_protocol / http_client
+│   ├── audio/            # audio_cap / audio_play / opus_codec / resample
+│   └── wifi/             # wifi_manager（wpa_ctrl 封装）
+├── ui/                   # LVGL 界面（唯一允许 include lvgl）
+│   ├── ui_facade.c       # 业务事件 → UI 分发（唯一订阅点）
+│   └── ui_msg / ui_navigate / ui_main / ui_face / ui_menu / ui_wifi_setup / ui_res
+├── osal/                 # OSAL：纯 C99 接口头(include/) + POSIX 实现(posix/)
+│                         # MCU 移植 = 换 posix/ 目录实现
+├── port/                 # 板级平台层：linux/(sunxifb+evdev)  sdl/(PC 模拟器)
+├── third_party/          # lvgl 8.3.1 / lv_drivers / freetype / cjson（vendored）
+├── assets/               # fonts + images + config.ini（板上推到 /mnt/UDISK/xiaozhi）
+├── tools/gen_assets.py   # PIL 素材生成器
+└── docs/                 # plan.md（里程碑踩坑）+ architecture-refactor.md（重构方案）
 ```
 
-## 构建
+## 构建（CMake，双平台）
 
 ```bash
-./scripts/setup.sh     # 首次：复制工具链 + 编译 opus（产物在 _libs/，gitignore）
-make -j$(nproc)        # 产物 build/xiaozhi（ARM 硬浮点，动态链接）
+# 板上产物（ARM 硬浮点，需先跑 scripts/setup.sh 准备 toolchain/ 与 _libs/）
+TINA_SDK_PATH=<Tina SDK 路径> ./scripts/setup.sh
+./scripts/build.sh t113        # → build-t113/xiaozhi
+                               # 注意：必须经本脚本（wrapper gcc 要 STAGING_DIR env）
+
+# PC 模拟器（SDL 480×640 窗口，鼠标=触摸）
+./scripts/build.sh host        # → build-host/xiaozhi（资源自动找 ../assets）
 ```
 
-> 工具链必须用 `toolchain-sunxi-glibc-gcc-830`（armhf，匹配板上 glibc 2.29）。
-> 不进 git，克隆后跑 `TINA_SDK_PATH=<SDK路径> ./scripts/setup.sh`。
+CI：GitHub Actions（`.github/workflows/build.yml`）host 构建 + xvfb 冒烟，
+artifact 下载 `xiaozhi-sim-linux64.tar.gz` 解压即跑（`tar xzf && ./xiaozhi-sim/xiaozhi`）。
 
 ## 部署运行
 
 ```bash
-./scripts/deploy.sh    # adb push app/字体/库 + 启动
+./scripts/deploy.sh    # adb push 产物/字体/素材/库 + start-stop-daemon 启动（与蓝牙音箱互斥）
 ```
 
 ## 里程碑状态
@@ -77,6 +91,14 @@ make -j$(nproc)        # 产物 build/xiaozhi（ARM 硬浮点，动态链接）
     并发分配损坏）→ 线程消息改走 `ui_msg` 互斥队列；修复扫描消息 free 静态缓存
     导致的堆损坏；修复菜单/配网路径协议线程未启动
 - [ ] M5 剩余：与蓝牙音箱切换 + 开机自启
+- [x] R1 架构重构（2026-09-01，CMake/OSAL/解耦/模拟器/CI，详篇见
+  [`docs/architecture-refactor.md`](docs/architecture-refactor.md)）：
+  - **CMake 双平台**：`scripts/build.sh t113|host`，旧 Makefile 删除
+  - **OSAL 分层**：osal/ 9 接口头 + POSIX 实现，业务层零 POSIX 直接调用
+  - **UI↔业务解耦**：ui 只走 app_api（意图）+ app_event_bus（事件），
+    ui/ 无业务头引用、app/ 无 LVGL 引用（编译期强制）
+  - **PC SDL 模拟器**：host 产物 480×640 窗口，资源路径运行时解析（ui_res）
+  - **修复存量 bug**：协议线程直调 ui_main_on_state（LVGL 线程违规）改事件总线
 
 ## 已知事项
 

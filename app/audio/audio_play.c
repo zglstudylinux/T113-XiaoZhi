@@ -13,6 +13,7 @@
  * tts stop → drain() 等环形缓冲（ALSA 自身缓冲）播完再回 idle。
  */
 #include "audio_play.h"
+#include "app_config.h"
 #include "opus_codec.h"
 #include "resample.h"
 #include <alsa/asoundlib.h>
@@ -111,8 +112,8 @@ static void *play_thread(void *arg)
     static int16_t pcm_st[RS_OUT_MAX * 2];   /* mono → stereo 交织 */
     int frames_out = 0;
 #ifdef DIAG_DUMP_PCM
-    FILE *df = fopen("/mnt/UDISK/xiaozhi/diag_play.pcm", "wb");
-    if (df) printf("[play][diag] dump → /mnt/UDISK/xiaozhi/diag_play.pcm\n");
+    FILE *df = fopen(app_config_path("diag_play.pcm"), "wb");
+    if (df) printf("[play][diag] dump → diag_play.pcm\n");
 #endif
 
     while (osal_atomic_get(&g_run)) {
