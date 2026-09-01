@@ -100,6 +100,22 @@ static char g_cur_ip[16];
 
 static void set_state(wifi_state_t s) { osal_atomic_set(&g_state, s); }
 
+/* UTF-8 安全截断：绝不从多字节序列中间切断（中文 SSID 超长时
+ * 硬切会留半个字 → UI 标题末尾乱码）。dst_sz 含 '\0'。 */
+static void utf8_truncate(char *dst, const char *src, int dst_sz)
+{
+    int keep = dst_sz - 1;              /* 可用字节数 */
+    int len = (int)strlen(src);
+    if (len > keep) {
+        len = keep;
+        /* 回退到 UTF-8 序列边界：10xxxxxx 是续字节，砍到首字节为止 */
+        while (len > 0 && ((unsigned char)src[len] & 0xC0) == 0x80)
+            len--;
+    }
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+}
+
 wifi_state_t wifi_manager_state(void) { return (wifi_state_t)osal_atomic_get(&g_state); }
 const char *wifi_manager_get_ip(void)  { return g_cur_ip[0] ? g_cur_ip : NULL; }
 const char *wifi_manager_get_ssid(void){ return g_cur_ssid[0] ? g_cur_ssid : NULL; }
@@ -320,8 +336,7 @@ int wifi_manager_scan(wifi_ap_t *aps, int max_ap)
         }
         if (dup)
             continue;
-        strncpy(aps[count].ssid, ssid, WIFI_MAX_SSID_LEN);
-        aps[count].ssid[WIFI_MAX_SSID_LEN] = '\0';
+        utf8_truncate(aps[count].ssid, ssid, WIFI_MAX_SSID_LEN + 1);
         aps[count].rssi = (int16_t)sig;
         aps[count].auth_open = (strstr(flags, "WPA") == NULL &&
                                 strstr(flags, "WEP") == NULL) ? 1 : 0;

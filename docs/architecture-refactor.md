@@ -193,8 +193,9 @@ int  app_api_wifi_state(void);
 | P3 模拟器+CI ✅ | port/sdl + ui_res + build.yml | 本机 SDL 窗口可导航（480×640 菜单页渲染正常，PC 无网卡走菜单页路径）；Actions 见仓库 | 不需 |
 | P4 解耦 ✅ | 事件总线、controller、app_api、app_state 修 bug（协议线程不再直调 LVGL，见风险 11）、ui_facade、main 瘦身（205→113 行） | grep：ui/∩业务头=空（唯一命中是注释）；app 层无 lvgl include；双平台编译过 | **🧪 板测 2 ✅ 对话链路通过（2026-09-01）**：WiFi 重连→OTA→hello→说话→STT→情绪→两句 TTS 播放，事件经新总线分发行为与解耦前一致；气泡自动滚动无回归。配网全流程（扫密码错/超时分支）未单独重测——逻辑零改动仅换 API 名 |
 | P5 配置统一 ✅ | app_config（数据目录 XZ_DATA_DIR 收敛：config.ini/wifi.cfg/diag dump 3 处归 1）；协议常量（OTA URL/UA/板型/默认 ws）进 app_config.h；ini 解析抽 app_config_load_ini；http_client.c 抽出（https_post 平移，行为逐行等价）；README 重写构建/目录段 | 改 config.ini 生效（路径解析逻辑未变，编译期验证 + 双平台构建过） | 复用板测 2 结论（config.ini 读取路径经 app_config_path，板上已验证同一文件） |
+| P6 配网页打磨 ✅ | ①SSID UTF-8 安全截断（中文超长不再切出乱码）②密码框右侧闭眼/睁眼图标切换明文 ③8 位实时校验（黄→绿提示行）+ 点连接拦截 ④placeholder 中文字体 ⑤弹窗重置密文态 ⑥关 pwd_show_time 动画消竞态 | 板上三轮验证：乱码消失、图标切换一次生效、<8 位拦截可见 | 板测（2026-09-01，用户实测通过） |
 
-push 节奏：✅ P2/P3/P4 均已按节奏 push；P5 完成后 push。
+push 节奏：✅ P2/P3/P4/P5/P6 均已 push。
 push 走代理：`git -c http.proxy=http://192.168.1.4:7897 push origin main`。
 
 ## 9. 风险与坑（已核实）
@@ -224,3 +225,12 @@ push 走代理：`git -c http.proxy=http://192.168.1.4:7897 push origin main`。
 13. **ui_res 的两条取径 API**：`ui_res_img()` 返回带 `S:` 盘符的 LVGL 路径（走 lv_fs），
     `ui_res_font()` 返回真实路径（FreeType 走标准 fopen，不能带盘符）。且两者共用单
     静态缓冲——**别在同一次调用里混用两个返回值**（后调覆盖前调）。
+14. **SSID 按 UTF-8 截断**（P6 踩中）：wpa SCAN_RESULTS 的 SSID 是原始字节，中文 UTF-8
+    每字 3 字节，`strncpy(ssid,32)` 会从多字节中间切断 → UI 显示乱码。用 `utf8_truncate()`
+    （wifi_manager.c）：截后回退到序列边界（`10xxxxxx` 续字节全砍）。
+15. **LVGL textarea 密码框三坑**（P6 踩中）：
+    - placeholder 含中文必须给 textarea 设 FreeType 字体（默认 Montserrat 无中文字形）；
+    - 密码模式下 LVGL 默认"输入后明文 1.5s 再打码"（`pwd_show_time`）挂定时动画，与
+      自定义显示/隐藏按钮竞态 → `set_password_show_time(0)` 关掉，输入立即打码；
+    - 显示/隐藏按钮以**自身图标状态**为真值翻转（`LV_SYMBOL_EYE_CLOSE/OPEN`，label
+      保持默认 Montserrat 才有 symbol 字形），别读 textarea 的切换中途状态。

@@ -30,7 +30,9 @@ static lv_obj_t *g_list;            /* AP 列表 */
 static lv_obj_t *g_status;          /* 状态行 */
 static lv_obj_t *g_psw_win;         /* 密码弹窗 */
 static lv_obj_t *g_psw_ta;
+static lv_obj_t *g_psw_hint;        /* 密码弹窗内位数提示行（8 位校验反馈） */
 static lv_obj_t *g_kb;
+static lv_obj_t *g_eye_lbl;         /* 显示/隐藏按钮的文字 */
 static int g_page_gone = 0;         /* 页已被导航销毁：线程回调直接丢弃 */
 
 /* 离开回调（ui_nav_go 切屏前调用）：指针置空，迟到的 async 丢弃 */
@@ -38,6 +40,8 @@ static void wifi_setup_leave(void)
 {
     g_page_gone = 1;
     g_scr = g_list = g_status = g_psw_win = g_psw_ta = g_kb = NULL;
+    g_psw_hint = NULL;
+    g_eye_lbl = NULL;
 }
 static char g_sel_ssid[33];
 static uint8_t g_sel_open;
@@ -172,7 +176,8 @@ static void conn_click_ev_cb(lv_event_t *e)
     const char *txt = lv_textarea_get_text(g_psw_ta);
     snprintf(g_psk_pending, sizeof(g_psk_pending), "%s", txt);
     if (!g_sel_open && strlen(g_psk_pending) < 8) {
-        lv_label_set_text(g_status, "密码至少 8 位");
+        lv_label_set_text(g_psw_hint, "密码至少 8 位");
+        lv_obj_set_style_text_color(g_psw_hint, lv_color_hex(0xF7B500), 0);
         return;
     }
     lv_obj_add_flag(g_psw_win, LV_OBJ_FLAG_HIDDEN);
@@ -213,6 +218,10 @@ static void ap_click_ev_cb(lv_event_t *e)
     snprintf(t, sizeof(t), "连接 %s", g_sel_ssid);
     lv_label_set_text(title, t);
     lv_textarea_set_text(g_psw_ta, "");
+    /* 每次弹窗重置为密文模式（上次点过"显示"不残留），按钮文字跟随 */
+    lv_textarea_set_password_mode(g_psw_ta, 1);
+    if (g_eye_lbl) lv_label_set_text(g_eye_lbl, LV_SYMBOL_EYE_CLOSE);
+    if (g_psw_hint) lv_label_set_text(g_psw_hint, "");
     lv_obj_clear_flag(g_psw_win, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(g_kb, LV_OBJ_FLAG_HIDDEN);
     lv_keyboard_set_textarea(g_kb, g_psw_ta);
@@ -225,6 +234,39 @@ static void retry_ev_cb(lv_event_t *e)
 }
 
 /* ---------- 密码弹窗 ---------- */
+
+/* 显示/隐藏密码：图标跟随（闭眼=密文默认态，睁眼=明文）。
+ * symbol 用 LVGL 内置 FontAwesome 字形，label 保持默认 Montserrat
+ * （FreeType 中文字体没有这些字形）。
+ * 以按钮图标为真值翻转（不读 textarea 状态）：密码模式下 LVGL 的
+ * auto-hide 动画（pwd_show_time 1.5s）会在输入后挂起，与点击竞态时
+ * 读 textarea 状态可能拿到切换中途值导致"点两下才生效"。 */
+static void eye_click_ev_cb(lv_event_t *e)
+{
+    (void)e;
+    bool showing = strcmp(lv_label_get_text(g_eye_lbl), LV_SYMBOL_EYE_OPEN) == 0;
+    bool show = !showing;               /* 目标态：当前睁眼→转密文，反之转明文 */
+    lv_textarea_set_password_mode(g_psw_ta, !show);
+    lv_label_set_text(g_eye_lbl, show ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_CLOSE);
+}
+
+/* 密码输入实时反馈：空=隐藏提示；<8 位=黄字提示；≥8=绿字可连接 */
+static void psw_ta_event_cb(lv_event_t *e)
+{
+    (void)e;
+    if (g_psw_hint == NULL)
+        return;
+    unsigned n = strlen(lv_textarea_get_text(g_psw_ta));
+    if (n == 0) {
+        lv_label_set_text(g_psw_hint, "");
+    } else if (n < 8) {
+        lv_label_set_text_fmt(g_psw_hint, "还差 %u 位（至少 8 位）", 8 - n);
+        lv_obj_set_style_text_color(g_psw_hint, lv_color_hex(0xF7B500), 0);
+    } else {
+        lv_label_set_text_fmt(g_psw_hint, "%u 位，可连接", n);
+        lv_obj_set_style_text_color(g_psw_hint, lv_color_hex(0x4CAF50), 0);
+    }
+}
 
 static void create_psw_win(lv_obj_t *parent)
 {
@@ -243,15 +285,41 @@ static void create_psw_win(lv_obj_t *parent)
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     g_psw_ta = lv_textarea_create(g_psw_win);
-    lv_obj_set_size(g_psw_ta, 400, 56);
-    lv_obj_align(g_psw_ta, LV_ALIGN_TOP_MID, 0, 48);
+    lv_obj_set_size(g_psw_ta, 310, 56);
+    lv_obj_align(g_psw_ta, LV_ALIGN_TOP_LEFT, 10, 48);
+    /* 必须设 FreeType 中文字体：默认 Montserrat 无中文字形，
+     * placeholder"WiFi 密码"会显示成"WiFi"+两个乱码 */
+    lv_obj_set_style_text_font(g_psw_ta, ui_font_cn_24, 0);
     lv_textarea_set_password_mode(g_psw_ta, 1);
+    /* 关掉"输入后明文 1.5s 再打码"动画（LVGL 默认）：输入立即显示圆点，
+     * 消除挂起动画与显示/隐藏按钮的状态竞态 */
+    lv_textarea_set_password_show_time(g_psw_ta, 0);
     lv_textarea_set_one_line(g_psw_ta, 1);
     lv_textarea_set_placeholder_text(g_psw_ta, "WiFi 密码");
+    lv_obj_add_event_cb(g_psw_ta, psw_ta_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    /* 显示/隐藏密码按钮（密码框右侧；FreeType 无眼睛符号，用文字） */
+    lv_obj_t *eye = lv_btn_create(g_psw_win);
+    lv_obj_set_size(eye, 80, 56);
+    lv_obj_align(eye, LV_ALIGN_TOP_RIGHT, -10, 48);
+    lv_obj_set_style_bg_color(eye, lv_color_hex(0x37474F), 0);
+    lv_obj_set_style_radius(eye, 8, 0);
+    g_eye_lbl = lv_label_create(eye);
+    /* 不设 FreeType：眼睛是 LVGL 内置 symbol（Montserrat 有字形） */
+    lv_label_set_text(g_eye_lbl, LV_SYMBOL_EYE_CLOSE);
+    lv_obj_center(g_eye_lbl);
+    lv_obj_add_event_cb(eye, eye_click_ev_cb, LV_EVENT_CLICKED, NULL);
+
+    /* 位数提示（实时：输入时黄→绿） */
+    g_psw_hint = lv_label_create(g_psw_win);
+    lv_obj_set_style_text_font(g_psw_hint, ui_font_cn_24, 0);
+    lv_obj_set_style_text_color(g_psw_hint, lv_color_hex(0xF7B500), 0);
+    lv_label_set_text(g_psw_hint, "");
+    lv_obj_align(g_psw_hint, LV_ALIGN_TOP_LEFT, 12, 108);
 
     lv_obj_t *conn = lv_btn_create(g_psw_win);
     lv_obj_set_size(conn, 190, 56);
-    lv_obj_align(conn, LV_ALIGN_TOP_LEFT, 10, 120);
+    lv_obj_align(conn, LV_ALIGN_TOP_LEFT, 10, 150);
     lv_obj_set_style_bg_color(conn, lv_color_hex(0x1A6FB5), 0);
     lv_obj_t *cl = lv_label_create(conn);
     lv_obj_set_style_text_font(cl, ui_font_cn_32, 0);
@@ -261,7 +329,7 @@ static void create_psw_win(lv_obj_t *parent)
 
     lv_obj_t *cancel = lv_btn_create(g_psw_win);
     lv_obj_set_size(cancel, 190, 56);
-    lv_obj_align(cancel, LV_ALIGN_TOP_RIGHT, -10, 120);
+    lv_obj_align(cancel, LV_ALIGN_TOP_RIGHT, -10, 150);
     lv_obj_set_style_bg_color(cancel, lv_color_hex(0x546E7A), 0);
     lv_obj_t *xl = lv_label_create(cancel);
     lv_obj_set_style_text_font(xl, ui_font_cn_32, 0);
