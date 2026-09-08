@@ -1,8 +1,8 @@
-# 构建产物
+# 构建产物（*.o 只忽略根级 C 产物——工具链内 crt*.o 等目标文件必须入库）
 build/
 build-t113/
 build-host/
-*.o
+/*.o
 
 # 编辑器
 .vscode/
