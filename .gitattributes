@@ -1,0 +1,5 @@
+# 交叉工具链整体按二进制处理：禁任何换行/文本化转换，软链与 +x 位原样保留
+platform/t113/toolchain/** -text
+*.a -text
+*.so -text
+*.so.* -text
