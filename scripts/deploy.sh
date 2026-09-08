@@ -44,11 +44,11 @@ $ADB push "$PROJ_DIR/assets/fonts/." /mnt/UDISK/xiaozhi/fonts/ 2>/dev/null || \
     $ADB shell "rm -rf /mnt/UDISK/xiaozhi/fonts; ln -s /mnt/UDISK/speaker/fonts /mnt/UDISK/xiaozhi/fonts"
 
 echo "[deploy] 推送 freetype 运行库（若板上已有则覆盖为同版本）..."
-$ADB push "$PROJ_DIR/third_party/freetype/lib/libfreetype.so.6.17.0" /usr/lib/ 2>/dev/null || true
+$ADB push "$PROJ_DIR/platform/t113/lib/libfreetype.so.6.17.0" /usr/lib/ 2>/dev/null || true
 $ADB shell "cd /usr/lib && ln -sf libfreetype.so.6.17.0 libfreetype.so.6 && ln -sf libfreetype.so.6.17.0 libfreetype.so" 2>/dev/null || true
 
 echo "[deploy] 推送 libspeexdsp（rootfs opkg 有记录但文件缺失，重烧后需重推）..."
-SPEEXDSP_SRC="${TINA_SDK_PATH:-/home/zgl/SDK/T113_SDK/T113-Tina5.0-V1.2}/out/t113/zgl_board/openwrt/staging_dir/target/usr/lib/libspeexdsp.so.1.5.1"
+SPEEXDSP_SRC="$PROJ_DIR/platform/t113/lib/libspeexdsp.so.1.5.1"
 if [ -f "$SPEEXDSP_SRC" ]; then
     $ADB push "$SPEEXDSP_SRC" /usr/lib/
     $ADB shell "cd /usr/lib && ln -sf libspeexdsp.so.1.5.1 libspeexdsp.so.1"

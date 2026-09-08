@@ -1,8 +1,11 @@
 name: build
 
-# PC 模拟器（host 构建）编译门禁 + 可运行产物。
-# 说明：只做 x86 host CI（方案确认的决策）；ARM 交叉由本地
-# ./scripts/build.sh t113 承担（需要 SDK staging，CI 不具备）。
+# 双 job CI：
+#   host-sim   — PC 模拟器编译门禁 + 可运行产物（SDL 480x640）
+#   t113-cross — ARM 交叉编译（工具链入库 platform/t113/toolchain，零外部依赖）
+#
+# t113 冒烟锚点：readelf -d 的 NEEDED 恰好 12 项（顺序即契约），
+# 与本地基线逐项比对 —— 依赖集合变化即失败。
 
 on:
   push:
@@ -27,13 +30,13 @@ jobs:
             zlib1g-dev libbz2-dev libsdl2-dev
 
       - name: Build host simulator
-        run: ./scripts/build.sh host
+        run: ./build.sh host
 
       - name: Smoke test (headless, xvfb)
         run: |
           sudo apt-get install -y --no-install-recommends xvfb
           # 无显示环境下起窗口跑 5 秒：不崩（exit 124=timeout 杀掉）即过。
-          # 无 wlroots/X 合成器时 SDL 可用 dummy video driver 验证初始化路径。
+          # 无合成器时 SDL 可用 dummy video driver 验证初始化路径。
           xvfb-run -a timeout 5 ./build-host/xiaozhi || [ $? -eq 124 ]
           echo "smoke ok: process survived 5s under xvfb"
 
@@ -49,4 +52,48 @@ jobs:
         with:
           name: xiaozhi-sim-linux64
           path: xiaozhi-sim-linux64.tar.gz
+          retention-days: 14
+
+  t113-cross:
+    name: T113 cross (armv7-a hard-float, toolchain in-repo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4   # 工具链软链与 +x 位由 git/checkout 原生还原
+
+      - name: Build (zero external deps)
+        run: ./build.sh t113        # build.sh 负责 export STAGING_DIR
+
+      - name: Smoke (ELF arch + NEEDED list)
+        run: |
+          file build-t113/xiaozhi | grep -q 'ELF 32-bit.*ARM'
+          READ=platform/t113/toolchain/bin/arm-openwrt-linux-readelf
+          $READ -h build-t113/xiaozhi | grep -q 'Machine.*ARM'
+          $READ -A build-t113/xiaozhi | grep -q 'Tag_ABI_VFP_args: VFP registers'
+          # NEEDED 固定 12 项，顺序即契约（零行为变化验收）
+          $READ -d build-t113/xiaozhi | grep NEEDED | awk '{print $NF}' | tr -d '[]' \
+            > needed.actual
+          cat > needed.expect <<'EOF'
+          libfreetype.so.6
+          libssl.so.1.1
+          libcrypto.so.1.1
+          libasound.so.2
+          libspeexdsp.so.1
+          libz.so.1
+          libbz2.so.1.0
+          libpthread.so.0
+          librt.so.1
+          libdl.so.2
+          libm.so.6
+          libc.so.6
+          EOF
+          # heredoc 缩进剥离后逐行比对
+          sed -i 's/^ *//' needed.expect
+          diff -u needed.expect needed.actual
+          echo "smoke ok: ELF32 ARM hard-float, NEEDED 12/12 unchanged"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaozhi-t113-armhf
+          path: build-t113/xiaozhi
           retention-days: 14

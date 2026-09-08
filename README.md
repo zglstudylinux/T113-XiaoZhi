@@ -8,46 +8,54 @@ WiFi 联网，点按开始说话，服务器 ASR/LLM/TTS，板子喇叭回答，
   下行 Opus → 解码 → 重采样 → hw:audiocodec 喇叭
 - 屏显链路：sunxifb(/dev/fb0 32bpp) + evdev(/dev/input/event4)，FreeType 中文字体
 
-## 目录结构（P2 重构后分层）
+## 目录结构（R2：component/platform 排版，对齐 app_sdk）
 
 ```
-├── CMakeLists.txt  cmake/  scripts/    # CMake 双平台构建（t113 交叉 / host PC）
-├── main/main.c           # 入口（纯装配：port → facade → 启动页 → 主循环）
-├── app/                  # 业务层（纯 C99，禁 LVGL——编译期强制分层）
-│   ├── app_api.c/.h      # UI→业务唯一入口
+├── build.sh               # 唯一构建入口（t113|host|clean，export STAGING_DIR）
+├── CMakeLists.txt         # 平台二选一 + third_party 库 + 链接契约
+├── main/main.c            # 入口（纯装配：port → facade → 启动页 → 主循环）
+├── app/                   # 业务编排（纯 C99，禁 LVGL——编译期强制分层）
+│   ├── app_api.c/.h       # UI→业务唯一入口
 │   ├── app_events.h + app_event_bus.c   # 业务→UI 事件总线
-│   ├── app_state.c       # 状态机（发事件不摸 UI）
-│   ├── controller.c      # 协议事件分发
-│   ├── app_config.c/.h   # 数据目录 + 协议常量收敛（P5）
-│   ├── net/              # ws_client / xz_protocol / http_client
-│   ├── audio/            # audio_cap / audio_play / opus_codec / resample
-│   └── wifi/             # wifi_manager（wpa_ctrl 封装）
-├── ui/                   # LVGL 界面（唯一允许 include lvgl）
-│   ├── ui_facade.c       # 业务事件 → UI 分发（唯一订阅点）
+│   ├── app_state.c        # 状态机（发事件不摸 UI）
+│   ├── controller.c       # 协议事件分发
+│   └── app_config.c/.h    # 数据目录 + 协议常量收敛
+├── component/             # 平台无关组件（各带 CMakeLists 出 STATIC 库）
+│   ├── osal/              # 纯 C99 接口头(include/) + POSIX 实现(posix/)
+│   ├── net/               # ws_client / xz_protocol / http_client
+│   ├── audio/             # audio_cap / audio_play / opus_codec / resample
+│   ├── wifi/              # wifi_manager（wpa_ctrl 封装）
+│   └── hal/port_display.h # 显示/输入 HAL 接口头
+├── platform/              # 平台层（按平台二选一编译）
+│   ├── t113/              # t113.cmake 交叉工具链文件 + port/(sunxifb+evdev)
+│   │   ├── toolchain/     # 裁剪版 gcc-8.3.0 glibc armhf（入库，克隆即编）
+│   │   ├── include/ lib/  # openssl/alsa/opus/speex/freetype 头与预编译库
+│   │   └── lib/README     # libopus.a 交叉编译配方留档
+│   └── host/port/         # SDL 模拟器后端（PC/CI）
+├── ui/                    # LVGL 界面（唯一允许 include lvgl）
+│   ├── ui_facade.c        # 业务事件 → UI 分发（唯一订阅点）
 │   └── ui_msg / ui_navigate / ui_main / ui_face / ui_menu / ui_wifi_setup / ui_res
-├── osal/                 # OSAL：纯 C99 接口头(include/) + POSIX 实现(posix/)
-│                         # MCU 移植 = 换 posix/ 目录实现
-├── port/                 # 板级平台层：linux/(sunxifb+evdev)  sdl/(PC 模拟器)
-├── third_party/          # lvgl 8.3.1 / lv_drivers / freetype / cjson（vendored）
-├── assets/               # fonts + images + config.ini（板上推到 /mnt/UDISK/xiaozhi）
-├── tools/gen_assets.py   # PIL 素材生成器
-└── docs/                 # plan.md（里程碑踩坑）+ architecture-refactor.md（重构方案）
+├── third_party/           # lvgl 8.3.1 / lv_drivers / cjson（vendored 纯源码）
+├── assets/                # fonts + images + config.ini（板上推到 /mnt/UDISK/xiaozhi）
+├── scripts/deploy.sh      # adb 部署
+├── tools/gen_assets.py    # PIL 素材生成器
+└── docs/                  # plan.md（里程碑踩坑）+ architecture-refactor.md（重构方案）
 ```
 
 ## 构建（CMake，双平台）
 
 ```bash
-# 板上产物（ARM 硬浮点，需先跑 scripts/setup.sh 准备 toolchain/ 与 _libs/）
-TINA_SDK_PATH=<Tina SDK 路径> ./scripts/setup.sh
-./scripts/build.sh t113        # → build-t113/xiaozhi
-                               # 注意：必须经本脚本（wrapper gcc 要 STAGING_DIR env）
-
-# PC 模拟器（SDL 480×640 窗口，鼠标=触摸）
-./scripts/build.sh host        # → build-host/xiaozhi（资源自动找 ../assets）
+./build.sh t113        # 交叉构建 → build-t113/xiaozhi（工具链/库全在仓库，克隆即编）
+./build.sh host        # PC 模拟器（SDL 480×640，鼠标=触摸）→ build-host/xiaozhi
 ```
 
-CI：GitHub Actions（`.github/workflows/build.yml`）host 构建 + xvfb 冒烟，
-artifact 下载 `xiaozhi-sim-linux64.tar.gz` 解压即跑（`tar xzf && ./xiaozhi-sim/xiaozhi`）。
+注意：必须经 `build.sh`（wrapper gcc 的 specs 要求 STAGING_DIR 环境变量，
+脚本负责 export；裸跑 `cmake --build` 会报
+`environment variable 'STAGING_DIR' not defined`）。
+
+CI：GitHub Actions（`.github/workflows/build.yml`）双 job——
+- `host-sim`：模拟器构建 + xvfb 冒烟，artifact `xiaozhi-sim-linux64.tar.gz` 解压即跑；
+- `t113-cross`：交叉编译（零外部依赖）+ NEEDED 12 项依赖契约比对，artifact `xiaozhi-t113-armhf`。
 
 ## 部署运行
 
@@ -93,16 +101,24 @@ artifact 下载 `xiaozhi-sim-linux64.tar.gz` 解压即跑（`tar xzf && ./xiaozh
 - [ ] M5 剩余：与蓝牙音箱切换 + 开机自启
 - [x] R1 架构重构（2026-09-01，CMake/OSAL/解耦/模拟器/CI，详篇见
   [`docs/architecture-refactor.md`](docs/architecture-refactor.md)）：
-  - **CMake 双平台**：`scripts/build.sh t113|host`，旧 Makefile 删除
-  - **OSAL 分层**：osal/ 9 接口头 + POSIX 实现，业务层零 POSIX 直接调用
+  - **CMake 双平台**：`build.sh t113|host`，旧 Makefile 删除
+  - **OSAL 分层**：9 接口头 + POSIX 实现，业务层零 POSIX 直接调用
   - **UI↔业务解耦**：ui 只走 app_api（意图）+ app_event_bus（事件），
     ui/ 无业务头引用、app/ 无 LVGL 引用（编译期强制）
   - **PC SDL 模拟器**：host 产物 480×640 窗口，资源路径运行时解析（ui_res）
   - **修复存量 bug**：协议线程直调 ui_main_on_state（LVGL 线程违规）改事件总线
+- [x] R2 目录重排 + 工具链入库 + 交叉编译 CI（2026-09-08，对齐 app_sdk 排版）：
+  - **component/platform 排版**：osal/net/audio/wifi 出 STATIC 组件库；
+    port 与预编译库归 platform/{t113,host}；源码 #include 零修改完成迁移
+  - **工具链入库**：gcc-8.3.0 glibc armhf 裁剪 1.2G→148M 提交进
+    `platform/t113/toolchain/`（wrapper 可重定位；TINA_SDK_PATH/staging 依赖全消灭）
+  - **交叉编译 CI**：t113-cross job 零 apt 依赖，NEEDED 12 项依赖契约比对
+  - 验证：NEEDED 与 R1 产物逐项一致、ELF32/ARM/VFPv3、host 模拟器冒烟过
 
 ## 已知事项
 
 - 板上 `libspeexdsp.so` opkg 有记录但文件缺失（烧录镜像问题），deploy.sh 每次自动推送
+  （R2 起推 `platform/t113/lib/libspeexdsp.so.1.5.1`，不再依赖 Tina SDK staging）
 - 与蓝牙音箱项目互斥（抢 fb0/event4），deploy.sh 会先杀 bt_speaker
 - 板侧 mixer 设置断电回 dts 默认（HPF Off / Gain 19），M3 的 audio_cap 会代码内自动设置
 

@@ -197,11 +197,41 @@ int  app_api_wifi_state(void);
 
 push 节奏：✅ P2/P3/P4/P5/P6 均已 push。
 push 走代理：`git -c http.proxy=http://192.168.1.4:7897 push origin main`。
+（2026-09-08 起 github 可直连，push 不再需要代理。）
+
+## 8b. R2 目录重排 + 工具链入库 + 交叉编译 CI（2026-09-08 ✅）
+
+参考 `/home/zgl/SDK/app_sdk`（全志应用模板）排版，克隆仓库即可交叉编译：
+
+- **目录**：`osal/→component/osal`，`app/{net,audio,wifi}→component/{net,audio,wifi}`，
+  `port/port_display.h→component/hal/`，`port/{linux,sdl}→platform/{t113,host}/port`，
+  `cmake/*→platform/t113/{t113.cmake,CMakeLists}`；`main/app/ui` 保留。
+  各 component 带 CMakeLists 出 STATIC 库（`xz_osal/xz_net/xz_audio/xz_wifi/xz_port`）。
+- **依赖全部入库**（TINA_SDK_PATH/XZ_STAGING_DIR 依赖消灭）：
+  `_libs/include→platform/t113/include`，`_libs/lib/libopus.a` 与
+  `third_party/freetype/{include,lib}` → `platform/t113/{include,lib}`；
+  staging 的 ssl/crypto/asound/speexdsp 首次提交进 `platform/t113/lib/`
+  （opus 交叉编译配方留档 `platform/t113/lib/README.md`）。
+- **工具链入库**：gcc-8.3.0 glibc armhf 裁剪 1.2G→148M 提交进
+  `platform/t113/toolchain/`。裁剪要点：删 `lib/*.a` 大件（428M libc.a 等，
+  **保留 libc_nonshared.a/libssp_nonshared.a**）、gconv、gfortran/C++/sanitizer、
+  plugin、lto1；**必须保留** liblto_plugin.so（specs 默认传 `-plugin`，缺了硬报错）、
+  crt*/libgcc/specs/cc1、全套 `.so` 软链与 `*-2.29.so` 实体。wrapper gcc 用
+  `readlink -f` 自定位 sysroot，可重定位。
+- **构建入口**：`./build.sh t113|host|clean`（根目录，export STAGING_DIR）；
+  `scripts/{setup,build}.sh` 删除。
+- **CI 双 job**：`host-sim`（原样）+ `t113-cross`（零 apt 依赖；冒烟=file ELF32
+  ARM + VFP 硬浮点 + readelf NEEDED 恰好 12 项与固定清单 diff——依赖契约）。
+- **验证**：新产物 NEEDED 与 R1 基线 12 项逐项一致、ELF32/ARM/VFPv3、
+  host 模拟器冒烟过；源码 `#include` 零修改（全局 `-I component`、`-I component/hal`
+  保持前缀式引用命中）。
 
 ## 9. 风险与坑（已核实）
 
 1. **lv_conf.h**：必须 `-I ui`；漏配捡默认值（COLOR_DEPTH 16）→ 编译不报错但花屏。
-2. **include 顺序**：`_libs/include`（openssl 1.1.1 头）必须先于 SDK staging 头。
+2. **include 顺序**：（R2 后已消灭——openssl 头唯一来源 `platform/t113/include`；
+   R1 时代的"`_libs/include` 必须先于 SDK staging 头"随 staging 依赖移除而失效，
+   留档：当时颠倒会混入 SDK 另一套头导致 ABI 不匹配。）
 3. **STAGING_DIR**：wrapper gcc 只认环境变量；build.sh export 为准。
 4. **freetype**：IMPORTED 指 `.so` 本体（`.so.6` 软链不能给链接器）；`-lz -lbz2` 别丢。
 5. **静态 mutex**（ui_msg.c/audio_play.c 的 PTHREAD_MUTEX_INITIALIZER）改
