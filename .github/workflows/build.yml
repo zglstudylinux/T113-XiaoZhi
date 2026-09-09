@@ -36,8 +36,10 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends xvfb
           # 无显示环境下起窗口跑 5 秒：不崩（exit 124=timeout 杀掉）即过。
-          # 无合成器时 SDL 可用 dummy video driver 验证初始化路径。
-          xvfb-run -a timeout 5 ./build-host/xiaozhi || [ $? -eq 124 ]
+          # timeout 杀掉 Xvfb 后 xvfb-run 清理临时目录偶发竞态报错，
+          # 只以 xiaozhi 的退出码为准（写文件判定），清理错误不作为失败。
+          xvfb-run -a bash -c 'timeout 5 ./build-host/xiaozhi; echo $? > /tmp/xz_exit' || true
+          [ "$(cat /tmp/xz_exit)" = "124" ] || { echo "smoke FAILED: exit=$(cat /tmp/xz_exit)"; exit 1; }
           echo "smoke ok: process survived 5s under xvfb"
 
       - name: Package artifact
