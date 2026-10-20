@@ -111,9 +111,14 @@ const char *xz_protocol_activation_code(void)
  * HTTP 传输在 http_client.c（P5 从本文件抽出）。
  */
 
-/* OTA 注册：成功返回 0（g_ws_token/g_activation_code 已填） */
-static int ota_register(void)
+/* OTA 注册：成功返回 0（g_ws_token/g_activation_code 已填）。
+ * check_change=1 时（断线重连）对比旧验证码只发变化事件：
+ *   码出现（解绑/首次）→ XZ_EVT_ACTIVATION；码消失（绑定成功）→ XZ_EVT_BOUND */
+static int ota_register(int check_change)
 {
+    char prev_code[8];
+    snprintf(prev_code, sizeof(prev_code), "%s", g_activation_code);
+
     char body[512];
     /* board.type 必须是官方已注册的板型名（宏在 app_config.h），
      * version=2 对应官方固件当前协议版本 */
@@ -160,11 +165,18 @@ static int ota_register(void)
     if (code) {
         snprintf(g_activation_code, sizeof(g_activation_code), "%s", code);
         printf("[ota] ★ 激活验证码: %s\n", g_activation_code);
-        if (g_cb) {
-            char msg[160];
-            snprintf(msg, sizeof(msg), "%s", code);
-            g_cb(XZ_EVT_ACTIVATION, msg, g_cb_user);
-        }
+    } else {
+        g_activation_code[0] = '\0';   /* 绑定成功：响应不再带 activation */
+    }
+    /* 绑定状态变化 → 通知 UI（启动首轮 check_change=0：无码不发） */
+    if (check_change) {
+        int appeared = g_activation_code[0] && !prev_code[0];
+        int cleared = !g_activation_code[0] && prev_code[0];
+        if ((appeared || cleared) && g_cb)
+            g_cb(appeared ? XZ_EVT_ACTIVATION : XZ_EVT_BOUND,
+                 g_activation_code, g_cb_user);
+    } else if (g_activation_code[0] && g_cb) {
+        g_cb(XZ_EVT_ACTIVATION, g_activation_code, g_cb_user);
     }
     cJSON_Delete(root);
     return 0;
@@ -430,7 +442,7 @@ static void *xz_thread(void *arg)
 
     /* 先 OTA 注册设备（拿 ws token + 未绑定时 6 位验证码），
      * 失败也继续——用 config.ini 里的 token 连 */
-    ota_register();
+    ota_register(0);
 
     while (osal_atomic_get(&g_run)) {
         char headers[512];
@@ -455,6 +467,10 @@ static void *xz_thread(void *arg)
         for (int i = 0; i < backoff * 10 && osal_atomic_get(&g_run); i++)
             osal_sleep_ms(100);
         backoff = backoff >= 30 ? 30 : backoff * 2;
+        /* 重连前重查 OTA：用户可能刚在控制台绑定/解绑设备，
+         * 绑定状态变化 → ACTIVATION/BOUND 事件刷 UI（服务器 60~90s
+         * 踢一次空闲连接，重连是天然的绑定状态刷新点） */
+        ota_register(1);
     }
     return NULL;
 }

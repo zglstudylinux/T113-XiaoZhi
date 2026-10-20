@@ -21,7 +21,8 @@ enum {
     XZ_EVT_TTS_STOP,
     XZ_EVT_DISCONNECTED,    /* 连接断开 */
     XZ_EVT_CONNECTED,       /* ws 已连上（hello 前） */
-    XZ_EVT_ACTIVATION,      /* OTA 注册返回验证码：data=6 位码 */
+    XZ_EVT_ACTIVATION,      /* OTA 验证码出现（解绑/首次）：data=6 位码 */
+    XZ_EVT_BOUND,           /* OTA 验证码消失（绑定成功）：data=NULL */
     XZ_EVT_EMOTION,         /* llm 情绪：data=情绪串（happy/sad/...） */
 };
 
@@ -32,6 +33,10 @@ void xz_protocol_stop(void);
 
 /* 当前 session_id（未握手为 NULL） */
 const char *xz_protocol_session_id(void);
+
+/* 未绑定设备的 6 位验证码（OTA 注册下发；已绑定/未拿到为 NULL）。
+ * 事件可能在 UI 离开主页时到达，进主页时查询补显 */
+const char *xz_protocol_activation_code(void);
 
 /* 协议线程是否已启动（幂等启动判断用） */
 int  xz_protocol_started(void);

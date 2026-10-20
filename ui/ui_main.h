@@ -20,12 +20,18 @@ void ui_wifi_setup_open(lv_obj_t *scr);
 /* 未绑定设备：状态行大字显示 6 位验证码（主线程内调用） */
 void ui_main_show_activation(const char *code);
 
+/* 绑定成功：退出验证码显示，状态/信息行恢复正常（主线程内调用） */
+void ui_main_clear_activation(void);
+
 /* app_state 回调（主线程内被调） */
 void ui_main_on_state(xz_state_t s, const char *reason);
 
 /* 服务器连接信息行（M2：已连接 session_id / 验证码提示）。
  * 内部 lv_async_call 转主线程，任意线程可调。 */
 void ui_main_on_server_info(const char *line1, const char *line2);
+
+/* 信息行按真实连接状态刷新（session_id 在握 = 已连接），任意线程可调 */
+void ui_main_refresh_server_info(void);
 
 /* 聊天气泡（M3/M4：stt/tts 文本；内部 lv_async_call 转主线程） */
 void ui_main_add_chat(uint8_t from_user, const char *text);

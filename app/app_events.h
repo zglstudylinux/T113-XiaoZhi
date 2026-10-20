@@ -18,7 +18,8 @@ typedef enum {
     APP_EVT_CHAT_USER,          /* data=用户话术（stt） */
     APP_EVT_CHAT_ASSISTANT,     /* data=助手话术（tts 句子） */
     APP_EVT_SERVER_INFO,        /* data=l1；aux=l2（连接状态/提示行） */
-    APP_EVT_ACTIVATION,         /* data=6 位验证码 */
+    APP_EVT_ACTIVATION,         /* data=6 位验证码（未绑定） */
+    APP_EVT_BOUND,              /* 绑定成功：UI 退出验证码显示恢复状态行 */
     APP_EVT_EMOTION,            /* data=情绪串（happy/sad/...） */
     APP_EVT_NAVIGATE,           /* aux1=目标页（app_page_t） */
 } app_evt_t;

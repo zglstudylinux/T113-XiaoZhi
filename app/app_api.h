@@ -15,6 +15,9 @@
 /* controller.c 提供（协议事件入口，app_api_ensure_started 注册给协议层） */
 int controller_event_cb(int event, const char *data, void *user);
 
+/* 信息行按真实连接状态刷新（ui_main_refresh_server_info 转发，任意线程可调） */
+void app_api_refresh_server_info(void);
+
 /* ---- 网络状态（只读查询） ---- */
 int  app_api_wifi_connected(void);      /* 1 = 已连 */
 int  app_api_wifi_state(void);          /* wifi_state_t */
@@ -29,6 +32,13 @@ void app_api_wifi_save(const char *ssid, const char *psk);
 int  app_api_talk_start(void);          /* 0 成功开始 */
 int  app_api_talking(void);
 void app_api_talk_stop(void);
+
+/* 未绑定设备的 6 位验证码（OTA 下发，协议层缓存；无则 NULL）。
+ * 事件可能先于主页存在，进主页时查询补显 */
+const char *app_api_activation_code(void);
+
+/* 当前服务器 session_id（ws 握手完成才有；否则 NULL） */
+const char *app_api_session_id(void);
 
 /* ---- 生命周期（替代原 main.c 被反向调用的两个函数） ---- */
 void app_api_ensure_started(void);      /* 进小智页：确保协议在跑（幂等） */

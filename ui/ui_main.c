@@ -43,6 +43,10 @@ static const char *state_text(xz_state_t s)
 static void talk_btn_event(lv_event_t *e);
 void ui_wifi_setup_open(lv_obj_t *scr);       /* 文件尾：配网页适配器 */
 
+/* 服务器连接真实状态 → 信息行（session_id 在握 = 已连接）。
+ * 前置声明：ui_main_refresh_server_info（下方）经 ui_msg 泵在主线程调用 */
+static void refresh_server_info(void);
+
 static void back_btn_event(lv_event_t *e)
 {
     (void)e;
@@ -119,12 +123,13 @@ void ui_main_create(lv_obj_t *scr)
         lv_label_set_text(g_wifi_label, "点下方按钮先配网");
         lv_obj_align(g_wifi_label, LV_ALIGN_TOP_MID, 0, 392);
     } else {
-        /* 服务器信息行（session / 验证码） */
+        /* 服务器信息行：按真实连接状态显示（重进页面时 ws 可能已在握） */
         g_net_label = lv_label_create(scr);
         lv_obj_set_style_text_font(g_net_label, ui_font_cn_24, 0);
         lv_obj_set_style_text_color(g_net_label, lv_color_hex(0x8FA3B8), 0);
         lv_label_set_text(g_net_label, "未连接服务器");
         lv_obj_align(g_net_label, LV_ALIGN_TOP_MID, 0, 392);
+        refresh_server_info();
     }
 
     /* 聊天区（滚动容器 + 气泡纵向排列） */
@@ -168,6 +173,12 @@ void ui_main_create(lv_obj_t *scr)
 
     /* 进入小智页：WiFi 就绪则确保协议在跑（幂等；覆盖菜单/配网等入口） */
     app_api_ensure_started();
+
+    /* 补显验证码：ACTIVATION 事件可能先于本页创建（启动直连/重连期间
+     * 还在菜单或配网页），协议层有缓存则立即显示 */
+    const char *code = app_api_activation_code();
+    if (code != NULL && !no_wifi)
+        ui_main_show_activation(code);
 }
 
 /* 说话按钮：toggle talk_start/stop */
@@ -206,6 +217,11 @@ void ui_main_on_state(xz_state_t s, const char *reason)
         lv_label_set_text(g_state_label, "未连接 WiFi");
         return;
     }
+    /* 未绑定设备的验证码已显示时，状态刷新不覆盖（否则 hello ok/
+     * 重连循环每 100ms~90s 就把验证码刷掉） */
+    const char *code = app_api_activation_code();
+    if (code != NULL)
+        return;
     lv_label_set_text(g_state_label, state_text(s));
     if (ui_font_cn_24) {             /* 状态行用 24 号更协调 */
         lv_obj_set_style_text_font(g_state_label, ui_font_cn_32, 0);
@@ -238,6 +254,12 @@ static void net_info_async(void *p)
         lv_label_set_text(g_net_label, m->l1);
     lv_obj_align(g_net_label, LV_ALIGN_TOP_MID, 0, 392);
     free(m);
+}
+
+void ui_main_refresh_server_info(void)
+{
+    if (g_page_gone) return;
+    ui_msg_post((ui_msg_cb_t)refresh_server_info, NULL);
 }
 
 void ui_main_on_server_info(const char *line1, const char *line2)
@@ -346,15 +368,40 @@ void ui_wifi_setup_open(lv_obj_t *scr)
     ui_wifi_setup_create_ex(scr, app_api_wifi_setup_done);
 }
 
-/* 未绑定设备：状态行大字显示 6 位验证码（用户到 xiaozhi.me 控制台绑定） */
+/* 未绑定设备：两行提示——状态行大字验证码，信息行去控制台绑定 */
 void ui_main_show_activation(const char *code)
 {
     if (code == NULL || !code[0])
         return;
     if (g_page_gone || g_state_label == NULL)
         return;
+    if (!app_api_wifi_connected())
+        return;                     /* 未连网页面显示"未连接 WiFi"，不混显 */
     char txt[64];
-    snprintf(txt, sizeof(txt), "验证码 %s", code);
+    snprintf(txt, sizeof(txt), "%s", code);
     lv_label_set_text(g_state_label, txt);
     lv_obj_set_style_text_color(g_state_label, lv_color_hex(0xF7B500), 0);
+    ui_main_on_server_info("需要去 xiaozhi.me 控制台绑定设备", NULL);
+}
+
+/* 服务器连接真实状态 → 信息行（session_id 在握 = 已连接） */
+static void refresh_server_info(void)
+{
+    if (g_page_gone || g_net_label == NULL)
+        return;
+    const char *sid = app_api_session_id();
+    lv_label_set_text(g_net_label,
+        sid ? "服务器已连接" : "未连接服务器");
+    lv_obj_align(g_net_label, LV_ALIGN_TOP_MID, 0, 392);
+}
+
+/* 绑定成功：退出验证码显示，状态/信息行恢复正常样式与内容 */
+void ui_main_clear_activation(void)
+{
+    if (g_page_gone || g_state_label == NULL)
+        return;
+    lv_obj_set_style_text_color(g_state_label, lv_color_hex(0x4FC3F7), 0);
+    lv_label_set_text(g_state_label, state_text(app_state_get()));
+    lv_obj_align(g_state_label, LV_ALIGN_TOP_MID, 0, 350);
+    refresh_server_info();
 }

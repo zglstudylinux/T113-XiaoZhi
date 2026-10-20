@@ -5,6 +5,7 @@
 #include "app_state.h"
 #include "app_events.h"
 #include "app_event_bus.h"
+#include "ui_main.h"            /* app_api_refresh_server_info → ui_main_refresh_server_info */
 #include "wifi/wifi_manager.h"
 #include "net/xz_protocol.h"
 #include <stdio.h>
@@ -64,6 +65,21 @@ int app_api_talking(void)
 void app_api_talk_stop(void)
 {
     xz_protocol_talk_stop();
+}
+
+const char *app_api_activation_code(void)
+{
+    return xz_protocol_activation_code();
+}
+
+const char *app_api_session_id(void)
+{
+    return xz_protocol_session_id();
+}
+
+void app_api_refresh_server_info(void)
+{
+    ui_main_refresh_server_info();
 }
 
 /* ---- 生命周期 ---- */

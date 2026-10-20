@@ -41,6 +41,9 @@ static void facade_dispatch(app_evt_t evt, const char *data,
     case APP_EVT_ACTIVATION:
         ui_main_show_activation(data);
         break;
+    case APP_EVT_BOUND:
+        ui_main_clear_activation();
+        break;
     case APP_EVT_EMOTION:
         ui_face_set_emotion(data);
         break;

@@ -7,6 +7,7 @@
 #include "app_events.h"
 #include "app_event_bus.h"
 #include "app_state.h"
+#include "app_api.h"             /* app_api_activation_code */
 #include "net/xz_protocol.h"    /* XZ_EVT_* 枚举 */
 #include <stdlib.h>
 #include <stdio.h>
@@ -19,25 +20,29 @@ int controller_event_cb(int event, const char *data, void *user)
 
     switch (event) {
     case XZ_EVT_ACTIVATION:
-        /* 未绑定设备：验证码大字屏显 + 信息行提示去控制台绑定 */
-        app_event_post(APP_EVT_SERVER_INFO,
-                       "请到 xiaozhi.me 控制台输入验证码绑定设备", 0, NULL, 0);
+        /* 未绑定设备：验证码大字屏显（信息行由 ui_main_show_activation 统一写） */
         app_event_post(APP_EVT_ACTIVATION, d, 0, NULL, 0);
         break;
+    case XZ_EVT_BOUND:
+        /* 绑定成功（重连后 OTA 不再下发验证码）：恢复正常状态显示 */
+        app_event_post(APP_EVT_BOUND, NULL, 0, NULL, 0);
+        app_state_set(XZ_STATE_IDLE, "bound");
+        break;
     case XZ_EVT_HELLO_OK:
-        app_event_post(APP_EVT_SERVER_INFO, "服务器已连接", 0, NULL, 0);
+        /* 握手完成：session_id 在握，信息行按真实状态刷新 */
         app_state_set(XZ_STATE_IDLE, "hello ok");
+        app_api_refresh_server_info();
         break;
     case XZ_EVT_GOODBYE:
         app_event_post(APP_EVT_SERVER_INFO, "设备未绑定", 0, d, strlen(d) + 1);
         app_state_set(XZ_STATE_IDLE, "goodbye");
         break;
     case XZ_EVT_DISCONNECTED:
-        app_event_post(APP_EVT_SERVER_INFO, "服务器连接断开，重试中…", 0, NULL, 0);
+        /* 状态行回连接中；信息行按真实状态刷新（session 已清 → 未连接） */
         app_state_set(XZ_STATE_CONNECTING, "disconnected");
+        app_api_refresh_server_info();
         break;
     case XZ_EVT_CONNECTED:
-        app_event_post(APP_EVT_SERVER_INFO, "已连上，握手中…", 0, NULL, 0);
         break;
     case XZ_EVT_STT:
         app_event_post(APP_EVT_CHAT_USER, d, 0, NULL, 0);
